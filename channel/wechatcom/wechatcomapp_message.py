@@ -40,10 +40,31 @@ class WechatComAppMessage(ChatMessage):
                 if response.status_code == 200:
                     with open(self.content, "wb") as f:
                         f.write(response.content)
+                    logger.info(f"[wechatcom] Downloaded image file: {self.content}")    
                 else:
                     logger.info(f"[wechatcom] Failed to download image file, {response.content}")
 
             self._prepare_fn = download_image
+        elif msg.type == "file":
+            self.ctype = ContextType.FILE
+            # 获取文件名，企业微信文件消息可能有file_name属性
+            file_name = getattr(msg, 'file_name', f'file_{msg.media_id}')
+            # 保持原始文件扩展名
+            if hasattr(msg, 'file_ext') and msg.file_ext:
+                file_name = f'{file_name}.{msg.file_ext}'
+            self.content = TmpDir().path() + file_name  # content直接存临时目录路径
+
+            def download_file():
+                # 如果响应状态码是200，则将响应内容写入本地文件
+                response = client.media.download(msg.media_id)
+                if response.status_code == 200:
+                    with open(self.content, "wb") as f:
+                        f.write(response.content)
+                    logger.info(f"[wechatcom] Downloaded file: {file_name}")
+                else:
+                    logger.info(f"[wechatcom] Failed to download file, {response.content}")
+
+            self._prepare_fn = download_file
         else:
             raise NotImplementedError("Unsupported message type: Type:{} ".format(msg.type))
 

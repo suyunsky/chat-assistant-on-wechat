@@ -330,7 +330,8 @@ chatInput.addEventListener('keydown', function(e) {
         this.dispatchEvent(new Event('input'));
         e.preventDefault();
     } else if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !isComposing) {
-        sendMessage();
+        // 统一发送函数：如果有文件就发送文件+消息，否则只发送消息
+        sendUnifiedMessage();
         e.preventDefault();
     }
 });
@@ -1851,6 +1852,383 @@ navigateTo = function(viewId) {
     else if (viewId === 'tasks') loadTasksView();
     else if (viewId === 'logs') startLogStream();
 };
+
+// =====================================================================
+// File Upload Functions - Integrated in Dialog
+// =====================================================================
+let uploadedFiles = [];
+let dialogUploadedFiles = [];
+
+// 旧的文件上传功能（保持兼容性）
+function toggleFileUpload() {
+    const uploadArea = document.getElementById('file-upload-area');
+    const isVisible = !uploadArea.classList.contains('hidden');
+    
+    if (isVisible) {
+        cancelFileUpload();
+    } else {
+        uploadArea.classList.remove('hidden');
+        chatInput.disabled = true;
+        chatInput.placeholder = currentLang === 'zh' ? '文件上传模式...' : 'File upload mode...';
+        document.getElementById('file-upload-toggle').classList.add('bg-primary-50', 'dark:bg-primary-900/20', 'text-primary-500');
+        
+        // 初始化拖拽功能
+        initDragAndDrop();
+    }
+}
+
+function cancelFileUpload() {
+    const uploadArea = document.getElementById('file-upload-area');
+    uploadArea.classList.add('hidden');
+    chatInput.disabled = false;
+    chatInput.placeholder = t('input_placeholder');
+    document.getElementById('file-upload-toggle').classList.remove('bg-primary-50', 'dark:bg-primary-900/20', 'text-primary-500');
+    
+    // 清空文件列表
+    document.getElementById('file-list').innerHTML = '';
+    uploadedFiles = [];
+    document.getElementById('file-input').value = '';
+    
+    // 移除上传按钮
+    const uploadBtn = document.getElementById('upload-files-btn');
+    if (uploadBtn) uploadBtn.remove();
+}
+
+// 新的对话框集成文件上传功能
+function toggleFileUploadInDialog() {
+    const fileInput = document.getElementById('file-input-dialog');
+    if (fileInput) {
+        fileInput.click();
+    }
+}
+
+// 初始化对话框文件上传
+function initDialogFileUpload() {
+    const fileInput = document.getElementById('file-input-dialog');
+    if (!fileInput) return;
+    
+    fileInput.addEventListener('change', handleDialogFileSelection);
+    
+    // 初始化拖拽功能
+    const chatInputArea = document.querySelector('textarea#chat-input');
+    if (chatInputArea) {
+        chatInputArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            chatInputArea.classList.add('border-primary-400', 'dark:border-primary-500', 'bg-primary-50/50', 'dark:bg-primary-900/10');
+        });
+        
+        chatInputArea.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            chatInputArea.classList.remove('border-primary-400', 'dark:border-primary-500', 'bg-primary-50/50', 'dark:bg-primary-900/10');
+        });
+        
+        chatInputArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            chatInputArea.classList.remove('border-primary-400', 'dark:border-primary-500', 'bg-primary-50/50', 'dark:bg-primary-900/10');
+            
+            const files = e.dataTransfer.files;
+            handleDialogFileSelection({ target: { files } });
+        });
+    }
+}
+
+function handleDialogFileSelection(event) {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+    
+    const previewArea = document.getElementById('file-preview-area');
+    const previewContainer = previewArea.querySelector('.flex.flex-wrap.gap-2');
+    
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        
+        // 检查文件类型
+        const allowedTypes = ['.pdf', '.xlsx', '.xls', '.docx', '.doc', '.txt', '.jpg', '.jpeg', '.png'];
+        const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+        
+        if (!allowedTypes.includes(fileExt)) {
+            alert(currentLang === 'zh' 
+                ? `文件类型不支持: ${file.name}\n支持的类型: ${allowedTypes.join(', ')}`
+                : `File type not supported: ${file.name}\nSupported types: ${allowedTypes.join(', ')}`);
+            continue;
+        }
+        
+        // 检查文件大小 (最大10MB)
+        if (file.size > 10 * 1024 * 1024) {
+            alert(currentLang === 'zh'
+                ? `文件太大: ${file.name}\n最大支持10MB`
+                : `File too large: ${file.name}\nMaximum size is 10MB`);
+            continue;
+        }
+        
+        // 添加到上传列表
+        const fileId = 'dialog-file-' + Date.now() + '-' + i;
+        dialogUploadedFiles.push({
+            id: fileId,
+            file: file,
+            name: file.name,
+            size: file.size,
+            type: fileExt
+        });
+        
+        // 添加到预览区域
+        const filePreview = document.createElement('div');
+        filePreview.id = fileId;
+        filePreview.className = 'flex items-center gap-2 bg-slate-50 dark:bg-white/5 rounded-lg px-3 py-2';
+        filePreview.innerHTML = `
+            <div class="w-6 h-6 rounded-lg bg-primary-50 dark:bg-primary-900/20 flex items-center justify-center">
+                <i class="fas ${getFileIcon(fileExt)} text-primary-500 text-xs"></i>
+            </div>
+            <div class="min-w-0">
+                <div class="text-xs font-medium text-slate-700 dark:text-slate-200 truncate max-w-[120px]">${escapeHtml(file.name)}</div>
+                <div class="text-xs text-slate-500 dark:text-slate-400">${formatFileSize(file.size)}</div>
+            </div>
+            <button onclick="removeDialogFile('${fileId}')" class="text-slate-400 hover:text-red-500 cursor-pointer transition-colors ml-2">
+                <i class="fas fa-times text-xs"></i>
+            </button>
+        `;
+        previewContainer.appendChild(filePreview);
+    }
+    
+    // 显示预览区域
+    if (dialogUploadedFiles.length > 0) {
+        previewArea.classList.remove('hidden');
+        updateSendButtonState();
+    }
+}
+
+function getFileIcon(fileExt) {
+    const iconMap = {
+        '.pdf': 'fa-file-pdf',
+        '.xlsx': 'fa-file-excel',
+        '.xls': 'fa-file-excel',
+        '.docx': 'fa-file-word',
+        '.doc': 'fa-file-word',
+        '.txt': 'fa-file-lines',
+        '.jpg': 'fa-file-image',
+        '.jpeg': 'fa-file-image',
+        '.png': 'fa-file-image'
+    };
+    return iconMap[fileExt] || 'fa-file';
+}
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+function removeDialogFile(fileId) {
+    // 从数组中移除
+    dialogUploadedFiles = dialogUploadedFiles.filter(f => f.id !== fileId);
+    
+    // 从UI移除
+    const filePreview = document.getElementById(fileId);
+    if (filePreview) filePreview.remove();
+    
+    // 如果没有文件了，隐藏预览区域
+    if (dialogUploadedFiles.length === 0) {
+        const previewArea = document.getElementById('file-preview-area');
+        previewArea.classList.add('hidden');
+    }
+    
+    updateSendButtonState();
+}
+
+function updateSendButtonState() {
+    const hasText = chatInput.value.trim().length > 0;
+    const hasFiles = dialogUploadedFiles.length > 0;
+    sendBtn.disabled = !(hasText || hasFiles);
+}
+
+// 统一发送函数：如果有文件就发送文件+消息，否则只发送消息
+function sendUnifiedMessage() {
+    const hasFiles = dialogUploadedFiles.length > 0;
+    
+    if (hasFiles) {
+        // 如果有文件，使用sendMessageWithFiles函数
+        sendMessageWithFiles();
+    } else {
+        // 如果没有文件，使用原来的sendMessage函数
+        sendMessage();
+    }
+}
+
+// 发送消息和文件
+async function sendMessageWithFiles() {
+    const text = chatInput.value.trim();
+    const hasFiles = dialogUploadedFiles.length > 0;
+    
+    if (!text && !hasFiles) return;
+
+    const ws = document.getElementById('welcome-screen');
+    if (ws) ws.remove();
+
+    const timestamp = new Date();
+    
+    // 禁用发送按钮，防止重复点击
+    sendBtn.disabled = true;
+    
+    try {
+        // 如果有文件，先上传文件
+        let uploadedFileInfos = [];
+        if (hasFiles) {
+            uploadedFileInfos = await uploadDialogFiles(timestamp);
+        }
+        
+        // 构建完整的消息内容
+        let fullMessage = text;
+        
+        // 如果有文件上传成功，将文件信息添加到消息中
+        if (uploadedFileInfos.length > 0) {
+            const fileReferences = uploadedFileInfos.map(info => 
+                `[文件: ${info.name} (${info.type}, ${formatFileSize(info.size)})]`
+            ).join(' ');
+            fullMessage = `${text} ${fileReferences}`;
+            
+            // 在UI中显示文件上传消息
+            addUserMessage(`[上传了 ${uploadedFileInfos.length} 个文件] ${text}`, timestamp);
+        } else {
+            // 只有文本消息
+            addUserMessage(text, timestamp);
+        }
+        
+        // 发送消息到服务器
+        const loadingEl = addLoadingIndicator();
+
+        chatInput.value = '';
+        chatInput.style.height = '42px';
+        chatInput.style.overflowY = 'hidden';
+
+        fetch('/message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                session_id: sessionId, 
+                message: fullMessage, 
+                stream: true, 
+                timestamp: timestamp.toISOString(),
+                // 如果有文件，传递文件信息
+                files: uploadedFileInfos.length > 0 ? uploadedFileInfos : undefined
+            })
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'success') {
+                if (data.stream) {
+                    startSSE(data.request_id, loadingEl, timestamp);
+                } else {
+                    loadingContainers[data.request_id] = loadingEl;
+                    if (!isPolling) startPolling();
+                }
+            } else {
+                loadingEl.remove();
+                addBotMessage(t('error_send'), new Date());
+                sendBtn.disabled = false;
+            }
+        })
+        .catch(err => {
+            loadingEl.remove();
+            addBotMessage(err.name === 'AbortError' ? t('error_timeout') : t('error_send'), new Date());
+            sendBtn.disabled = false;
+        });
+        
+    } catch (error) {
+        alert(currentLang === 'zh'
+            ? '发送失败，请重试'
+            : 'Send failed, please try again');
+        sendBtn.disabled = false;
+    }
+    
+    // 清空文件预览
+    clearDialogFiles();
+}
+
+async function uploadDialogFiles(timestamp) {
+    if (dialogUploadedFiles.length === 0) return [];
+    
+    const uploadedInfos = [];
+    
+    try {
+        for (const fileInfo of dialogUploadedFiles) {
+            const formData = new FormData();
+            formData.append('file', fileInfo.file);
+            formData.append('session_id', sessionId);
+            
+            const response = await fetch('/upload', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            
+            if (result.status === 'success') {
+                // 收集上传成功的文件信息
+                uploadedInfos.push({
+                    name: fileInfo.name,
+                    size: fileInfo.size,
+                    type: fileInfo.type,
+                    file_path: result.file_path,
+                    filename: result.filename
+                });
+                
+                // 标记文件预览为成功
+                const filePreview = document.getElementById(fileInfo.id);
+                if (filePreview) {
+                    const icon = filePreview.querySelector('.fa-times');
+                    if (icon) {
+                        icon.className = 'fas fa-check text-green-500';
+                        icon.parentElement.onclick = null;
+                    }
+                }
+            } else {
+                alert(currentLang === 'zh'
+                    ? `文件上传失败: ${fileInfo.name}\n${result.message}`
+                    : `File upload failed: ${fileInfo.name}\n${result.message}`);
+            }
+        }
+        return uploadedInfos;
+    } catch (error) {
+        alert(currentLang === 'zh'
+            ? '上传失败，请重试'
+            : 'Upload failed, please try again');
+        return [];
+    }
+}
+
+function clearDialogFiles() {
+    const previewArea = document.getElementById('file-preview-area');
+    const previewContainer = previewArea.querySelector('.flex.flex-wrap.gap-2');
+    previewContainer.innerHTML = '';
+    previewArea.classList.add('hidden');
+    dialogUploadedFiles = [];
+    
+    // 清空文件输入
+    const fileInput = document.getElementById('file-input-dialog');
+    if (fileInput) fileInput.value = '';
+}
+
+// 更新输入事件监听器
+chatInput.addEventListener('input', function() {
+    this.style.height = '42px';
+    const scrollH = this.scrollHeight;
+    const newH = Math.min(scrollH, 180);
+    this.style.height = newH + 'px';
+    this.style.overflowY = scrollH > 180 ? 'auto' : 'hidden';
+    updateSendButtonState();
+});
+
+// 添加文件上传相关的i18n文本
+I18N.zh.file_upload_drop = '拖拽文件到此处或点击选择';
+I18N.zh.file_upload_types = '支持PDF、Excel、Word、图片文件';
+I18N.zh.file_upload_cancel = '取消';
+
+I18N.en.file_upload_drop = 'Drag & drop files here or click to select';
+I18N.en.file_upload_types = 'Supports PDF, Excel, Word, image files';
+I18N.en.file_upload_cancel = 'Cancel';
+
+// 初始化对话框文件上传
+initDialogFileUpload();
 
 // =====================================================================
 // Initialization

@@ -267,30 +267,81 @@
 
                     <!-- Chat Input -->
                     <div class="flex-shrink-0 border-t border-slate-200 dark:border-white/10 bg-white dark:bg-[#1A1A1A] px-4 py-3">
-                        <div class="max-w-3xl mx-auto flex items-center gap-2">
-                            <button id="new-chat-btn" class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-lg
-                                                             text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20
-                                                             cursor-pointer transition-colors duration-150" title="New Chat"
-                                    onclick="newChat()">
-                                <i class="fas fa-plus text-base"></i>
-                            </button>
-                            <textarea id="chat-input"
-                                      class="flex-1 min-w-0 px-4 py-[10px] rounded-xl border border-slate-200 dark:border-slate-600
-                                             bg-slate-50 dark:bg-white/5 text-slate-800 dark:text-slate-100
-                                             placeholder:text-slate-400 dark:placeholder:text-slate-500
-                                             focus:outline-none focus:ring-0 focus:border-primary-600
-                                             text-sm leading-relaxed"
-                                      rows="1"
-                                      data-i18n-placeholder="input_placeholder"
-                                      placeholder="Type a message..."></textarea>
-                            <button id="send-btn"
-                                    class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-lg
-                                           bg-primary-400 text-white hover:bg-primary-500
-                                           disabled:bg-slate-300 dark:disabled:bg-slate-600
-                                           disabled:cursor-not-allowed cursor-pointer transition-colors duration-150"
-                                    disabled onclick="sendMessage()">
-                                <i class="fas fa-paper-plane text-sm"></i>
-                            </button>
+                        <div class="max-w-3xl mx-auto">
+                            <!-- 文件上传区域 - 集成到消息对话框中 -->
+                            <div id="file-upload-area" class="mb-3 hidden">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <div class="flex-1">
+                                        <div class="file-upload-dropzone border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-4 text-center cursor-pointer hover:border-primary-400 dark:hover:border-primary-500 transition-colors duration-150"
+                                             onclick="document.getElementById('file-input').click()">
+                                            <i class="fas fa-cloud-upload-alt text-2xl text-slate-400 dark:text-slate-500 mb-2"></i>
+                                            <p class="text-sm text-slate-600 dark:text-slate-400 mb-1" data-i18n="file_upload_drop">拖拽文件到此处或点击选择</p>
+                                            <p class="text-xs text-slate-500 dark:text-slate-500" data-i18n="file_upload_types">支持PDF、Excel、Word、图片文件</p>
+                                        </div>
+                                        <input type="file" id="file-input" class="hidden" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.txt,.jpg,.jpeg,.png">
+                                    </div>
+                                    <button id="cancel-upload-btn" class="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer transition-colors duration-150 text-sm"
+                                            onclick="cancelFileUpload()" data-i18n="file_upload_cancel">取消</button>
+                                </div>
+                                <div id="file-list" class="space-y-2"></div>
+                            </div>
+                            
+                            <!-- 聊天输入区域 - 集成文件上传 -->
+                            <div class="flex items-center gap-2">
+                                <button id="new-chat-btn" class="flex-shrink-0 w-10 h-10 flex items-center justify-center rounded-lg
+                                                                 text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20
+                                                                 cursor-pointer transition-colors duration-150" title="New Chat"
+                                        onclick="newChat()">
+                                    <i class="fas fa-plus text-base"></i>
+                                </button>
+                                
+                                <!-- 文件上传按钮 - 现在集成到输入框中 -->
+                                <div class="relative flex-1 min-w-0">
+                                    <!-- 文件预览区域 -->
+                                    <div id="file-preview-area" class="mb-2 hidden">
+                                        <div class="flex flex-wrap gap-2">
+                                            <!-- 文件预览项会动态添加到这里 -->
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- 输入框和文件上传按钮组合 -->
+                                    <div class="relative">
+                                        <textarea id="chat-input"
+                                                  class="w-full px-4 py-[10px] pr-24 rounded-xl border border-slate-200 dark:border-slate-600
+                                                         bg-slate-50 dark:bg-white/5 text-slate-800 dark:text-slate-100
+                                                         placeholder:text-slate-400 dark:placeholder:text-slate-500
+                                                         focus:outline-none focus:ring-0 focus:border-primary-600
+                                                         text-sm leading-relaxed"
+                                                  rows="1"
+                                                  data-i18n-placeholder="input_placeholder"
+                                                  placeholder="Type a message..."></textarea>
+                                        
+                                        <!-- 右侧按钮组 -->
+                                        <div class="absolute right-2 top-1/2 transform -translate-y-1/2 flex items-center gap-1">
+                                            <!-- 文件上传按钮 -->
+                                            <button id="file-upload-toggle" class="w-8 h-8 flex items-center justify-center rounded-lg
+                                                                                   text-slate-400 hover:text-primary-500 hover:bg-primary-50 dark:hover:bg-primary-900/20
+                                                                                   cursor-pointer transition-colors duration-150" title="Upload File"
+                                                    onclick="toggleFileUploadInDialog()">
+                                                <i class="fas fa-paperclip text-sm"></i>
+                                            </button>
+                                            
+                                            <!-- 发送按钮 -->
+                                            <button id="send-btn"
+                                                    class="w-8 h-8 flex items-center justify-center rounded-lg
+                                                           bg-primary-400 text-white hover:bg-primary-500
+                                                           disabled:bg-slate-300 dark:disabled:bg-slate-600
+                                                           disabled:cursor-not-allowed cursor-pointer transition-colors duration-150"
+                                                    disabled onclick="sendMessageWithFiles()">
+                                                <i class="fas fa-paper-plane text-xs"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- 隐藏的文件输入 -->
+                                    <input type="file" id="file-input-dialog" class="hidden" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.txt,.jpg,.jpeg,.png">
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>

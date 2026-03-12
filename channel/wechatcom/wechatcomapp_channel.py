@@ -156,6 +156,34 @@ class WechatComAppChannel(ChatChannel):
                 return
             self.client.message.send_image(self.agent_id, receiver, response["media_id"])
             logger.info("[wechatcom] sendImage, receiver={}".format(receiver))
+        elif reply.type == ReplyType.FILE:  # 文件类型
+            file_path = reply.content
+            # 检查是否是file://格式的URL
+            if isinstance(file_path, str) and file_path.startswith("file://"):
+                file_path = file_path[7:]  # 移除file://前缀
+            
+            # 检查文件是否存在
+            if not os.path.exists(file_path):
+                logger.error("[wechatcom] File not found: {}".format(file_path))
+                self.client.message.send_text(self.agent_id, receiver, "抱歉，文件不存在或无法访问")
+                return
+            
+            try:
+                # 上传文件到企业微信
+                with open(file_path, "rb") as f:
+                    response = self.client.media.upload("file", f)
+                    logger.debug("[wechatcom] upload file response: {}".format(response))
+                
+                # 发送文件消息
+                self.client.message.send_file(self.agent_id, receiver, response["media_id"])
+                logger.info("[wechatcom] sendFile={}, receiver={}".format(file_path, receiver))
+                
+            except WeChatClientException as e:
+                logger.error("[wechatcom] upload/send file failed: {}".format(e))
+                self.client.message.send_text(self.agent_id, receiver, "抱歉，文件发送失败")
+            except Exception as e:
+                logger.error("[wechatcom] unexpected error when sending file: {}".format(e))
+                self.client.message.send_text(self.agent_id, receiver, "抱歉，文件发送过程中出现错误")
 
 
 class Query:

@@ -163,6 +163,7 @@ class WebChannel(ChatChannel):
             session_id = json_data.get('session_id', f'session_{int(time.time())}')
             prompt = json_data.get('message', '')
             use_sse = json_data.get('stream', True)
+            files = json_data.get('files', [])
 
             request_id = self._generate_request_id()
             self.request_to_session[request_id] = session_id
@@ -193,6 +194,11 @@ class WebChannel(ChatChannel):
             context["session_id"] = session_id
             context["receiver"] = session_id
             context["request_id"] = request_id
+            
+            # 如果有文件信息，添加到上下文中
+            if files:
+                context["files"] = files
+                logger.debug(f"[WebChannel] Added {len(files)} file(s) to context")
 
             if use_sse:
                 context["on_event"] = self._make_sse_callback(request_id)
@@ -312,6 +318,7 @@ class WebChannel(ChatChannel):
             '/api/scheduler', 'SchedulerHandler',
             '/api/history', 'HistoryHandler',
             '/api/logs', 'LogsHandler',
+            '/upload', 'FileUploadHandler',
             '/assets/(.*)', 'AssetsHandler',
         )
         app = web.application(urls, globals(), autoreload=False)
@@ -1090,6 +1097,92 @@ class LogsHandler:
                 return
 
         return generate()
+
+
+class FileUploadHandler:
+    def POST(self):
+        """Handle file uploads for Web channel."""
+        web.header('Content-Type', 'application/json; charset=utf-8')
+        try:
+            import tempfile
+            import shutil
+            from common.tmp_dir import TmpDir
+            
+            data = web.input(file={})
+            session_id = data.get('session_id', f'session_{int(time.time())}')
+            file_data = data.file
+            
+            # 检查文件数据是否存在（使用更安全的方式检查FieldStorage对象）
+            if file_data is None or file_data == {}:
+                return json.dumps({"status": "error", "message": "No file provided"})
+            
+            # 检查是否有filename属性
+            if not hasattr(file_data, 'filename'):
+                return json.dumps({"status": "error", "message": "Invalid file data"})
+            
+            # 检查文件名是否为空
+            if not file_data.filename or file_data.filename.strip() == '':
+                return json.dumps({"status": "error", "message": "No file provided"})
+            
+            # 验证文件类型
+            allowed_extensions = {'.pdf', '.xlsx', '.xls', '.docx', '.doc', '.txt', '.jpg', '.jpeg', '.png'}
+            file_ext = os.path.splitext(file_data.filename.lower())[1]
+            if file_ext not in allowed_extensions:
+                return json.dumps({
+                    "status": "error", 
+                    "message": f"File type not allowed. Allowed types: {', '.join(allowed_extensions)}"
+                })
+            
+            # 验证文件大小 (最大10MB)
+            max_size = 10 * 1024 * 1024  # 10MB
+            file_data.file.seek(0, 2)  # 移动到文件末尾
+            file_size = file_data.file.tell()
+            file_data.file.seek(0)  # 重置到文件开头
+            
+            if file_size > max_size:
+                return json.dumps({
+                    "status": "error",
+                    "message": f"File too large. Maximum size is {max_size // (1024*1024)}MB"
+                })
+            
+            # 保存文件到uploads目录（在当前工作目录下，方便AI访问）
+            uploads_dir = os.path.join(os.getcwd(), "uploads")
+            if not os.path.exists(uploads_dir):
+                os.makedirs(uploads_dir, exist_ok=True)
+
+            # 生成唯一但可读的文件名（保留原文件名，添加时间戳）
+            import uuid
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # 清理文件名，移除特殊字符
+            safe_filename = "".join(c for c in file_data.filename if c.isalnum() or c in "._- ").rstrip()
+            unique_filename = f"{timestamp}_{uuid.uuid4().hex[:8]}_{safe_filename}"
+            file_path = os.path.join(uploads_dir, unique_filename)
+
+            with open(file_path, 'wb') as f:
+                shutil.copyfileobj(file_data.file, f)
+
+            logger.info(f"[WebChannel] File uploaded: {file_data.filename} -> {file_path} ({file_size} bytes)")
+
+            # 只上传文件，不触发AI处理
+            # 文件处理将在用户发送消息时与指令一起进行
+            logger.info(f"[WebChannel] File uploaded (pending processing): {file_data.filename} -> {file_path} ({file_size} bytes)")
+            
+            # 记录上传目录信息，方便调试
+            logger.debug(f"[WebChannel] Uploads directory: {uploads_dir}, Current working directory: {os.getcwd()}")
+
+            return json.dumps({
+                "status": "success",
+                "filename": file_data.filename,
+                "file_path": file_path,
+                "file_size": file_size,
+                "file_type": file_ext,
+                "message": "File uploaded successfully (pending processing with instruction)"
+            })
+            
+        except Exception as e:
+            logger.error(f"[WebChannel] File upload error: {e}", exc_info=True)
+            return json.dumps({"status": "error", "message": str(e)})
 
 
 class AssetsHandler:

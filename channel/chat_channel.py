@@ -237,8 +237,104 @@ class ChatChannel(Channel):
                 }
             elif context.type == ContextType.SHARING:  # 分享信息，当前无默认逻辑
                 pass
-            elif context.type == ContextType.FUNCTION or context.type == ContextType.FILE:  # 文件消息及函数调用等，当前无默认逻辑
+            elif context.type == ContextType.FUNCTION:  # 函数调用等，当前无默认逻辑
                 pass
+            elif context.type == ContextType.FILE:  # 文件消息
+                # 获取文件信息
+                file_path = context.content
+                filename = context.get("filename", os.path.basename(file_path) if file_path else "未知文件")
+                file_size = context.get("file_size", 0)
+                file_type = context.get("file_type", "")
+                
+                # 检查文件是否存在
+                if file_path and os.path.exists(file_path):
+                    # 将文件复制到智能体工作空间目录，以便智能体可以访问
+                    try:
+                        import shutil
+                        from common.utils import expand_path
+                        from config import conf
+                        
+                        # 获取智能体工作空间目录
+                        workspace_dir = expand_path(conf().get("agent_workspace", "~/cow"))
+                        if not os.path.exists(workspace_dir):
+                            os.makedirs(workspace_dir, exist_ok=True)
+                        
+                        # 复制文件到工作空间目录
+                        workspace_file_path = os.path.join(workspace_dir, os.path.basename(file_path))
+                        shutil.copy2(file_path, workspace_file_path)
+                        
+                        logger.info(f"[chat_channel] File copied to workspace: {workspace_file_path}")
+                        
+                        # 根据文件类型返回不同的回复，并自动触发文件分析
+                        if file_type in ['.pdf', '.docx', '.doc', '.txt']:
+                            # 创建新的上下文来触发文件分析
+                            analysis_context = Context(ContextType.TEXT, f"请分析文件：{os.path.basename(file_path)}")
+                            analysis_context["session_id"] = context["session_id"]
+                            analysis_context["receiver"] = context["receiver"]
+                            analysis_context["request_id"] = context["request_id"]  # 使用相同的request_id
+                            # 创建一个简单的msg对象避免插件错误
+                            if context.get("msg"):
+                                analysis_context["msg"] = context.get("msg")
+                            else:
+                                # 创建一个简单的消息对象
+                                from channel.chat_message import ChatMessage
+                                msg = ChatMessage(None)
+                                msg.msg_id = f"file_analysis_{int(time.time())}"
+                                msg.create_time = int(time.time())
+                                msg.from_user_id = context.get("receiver", "user")
+                                msg.to_user_id = "assistant"
+                                msg.other_user_id = context.get("receiver", "user")
+                                msg.actual_user_id = context.get("receiver", "user")
+                                msg.is_group = False
+                                msg.from_user_nickname = "用户"
+                                msg.actual_user_nickname = "用户"
+                                analysis_context["msg"] = msg
+                            analysis_context["isgroup"] = context.get("isgroup", False)
+                            analysis_context["channel_type"] = context.get("channel_type", "web")
+                            
+                            # 启动文件分析线程
+                            threading.Thread(target=self.produce, args=(analysis_context,)).start()
+                            
+                            reply = Reply(ReplyType.TEXT, f"✅ 已收到文件：{filename}\n\n文件大小：{file_size} 字节\n文件类型：{file_type}\n\n文件已保存到工作空间目录，正在为您分析文档内容...")
+                        elif file_type in ['.xlsx', '.xls']:
+                            # 创建新的上下文来触发文件分析
+                            analysis_context = Context(ContextType.TEXT, f"请分析Excel文件：{os.path.basename(file_path)}")
+                            analysis_context["session_id"] = context["session_id"]
+                            analysis_context["receiver"] = context["receiver"]
+                            analysis_context["request_id"] = context["request_id"]  # 使用相同的request_id
+                            # 创建一个简单的msg对象避免插件错误
+                            if context.get("msg"):
+                                analysis_context["msg"] = context.get("msg")
+                            else:
+                                # 创建一个简单的消息对象
+                                from channel.chat_message import ChatMessage
+                                msg = ChatMessage(None)
+                                msg.msg_id = f"file_analysis_{int(time.time())}"
+                                msg.create_time = int(time.time())
+                                msg.from_user_id = context.get("receiver", "user")
+                                msg.to_user_id = "assistant"
+                                msg.other_user_id = context.get("receiver", "user")
+                                msg.actual_user_id = context.get("receiver", "user")
+                                msg.is_group = False
+                                msg.from_user_nickname = "用户"
+                                msg.actual_user_nickname = "用户"
+                                analysis_context["msg"] = msg
+                            analysis_context["isgroup"] = context.get("isgroup", False)
+                            analysis_context["channel_type"] = context.get("channel_type", "web")
+                            
+                            # 启动文件分析线程
+                            threading.Thread(target=self.produce, args=(analysis_context,)).start()
+                            
+                            reply = Reply(ReplyType.TEXT, f"✅ 已收到Excel文件：{filename}\n\n文件大小：{file_size} 字节\n文件类型：{file_type}\n\n文件已保存到工作空间目录，正在为您分析表格数据...")
+                        elif file_type in ['.jpg', '.jpeg', '.png']:
+                            reply = Reply(ReplyType.TEXT, f"✅ 已收到图片文件：{filename}\n\n文件大小：{file_size} 字节\n文件类型：{file_type}\n\n图片已保存到工作空间目录。")
+                        else:
+                            reply = Reply(ReplyType.TEXT, f"✅ 已收到文件：{filename}\n\n文件大小：{file_size} 字节\n文件类型：{file_type}\n\n文件已保存到工作空间目录！")
+                    except Exception as e:
+                        logger.error(f"[chat_channel] Failed to copy file to workspace: {e}")
+                        reply = Reply(ReplyType.TEXT, f"✅ 已收到文件：{filename}\n\n文件大小：{file_size} 字节\n文件类型：{file_type}\n\n文件上传成功，但保存到工作空间时出错：{str(e)}")
+                else:
+                    reply = Reply(ReplyType.TEXT, f"❌ 文件上传失败：文件不存在或无法访问")
             else:
                 logger.warning("[chat_channel] unknown context type: {}".format(context.type))
                 return

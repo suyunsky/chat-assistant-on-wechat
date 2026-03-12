@@ -1,0 +1,150 @@
+{
+  "name": "专精特新小巨人申报助手",
+  "description": "帮助企业完成专精特新小巨人申报全流程的智能助手",
+  "version": "1.0.0",
+  "author": "CowAgent Team",
+  "category": "企业服务",
+  "tags": ["专精特新", "小巨人", "企业申报", "政策申报", "企业服务"],
+  "icon": "🏢",
+  "enabled": true,
+  "config": {
+    "workflow": {
+      "steps": [
+        "信息收集",
+        "资格评估",
+        "材料生成",
+        "材料检查",
+        "完成输出"
+      ],
+      "timeout": 3600,
+      "max_sessions": 100
+    },
+    "data_requirements": {
+      "required_fields": [
+        "company_name",
+        "establishment_year",
+        "industry",
+        "main_business",
+        "revenue_2023",
+        "main_revenue_2023",
+        "rd_expense_2023",
+        "employee_count",
+        "rd_employee_count",
+        "patent_count",
+        "main_products",
+        "market_share"
+      ],
+      "optional_fields": [
+        "revenue_2021",
+        "revenue_2022",
+        "main_revenue_2021",
+        "main_revenue_2022",
+        "rd_expense_2021",
+        "rd_expense_2022",
+        "asset_total",
+        "liability_total",
+        "core_customers",
+        "certifications",
+        "rd_institution",
+        "management_system"
+      ]
+    },
+    "assessment_rules": {
+      "specialization": {
+        "market_years": 3,
+        "main_revenue_ratio": 70,
+        "revenue_growth_2y": 5
+      },
+      "refinement": {
+        "has_it_system": true,
+        "has_management_cert": true,
+        "asset_liability_ratio": 70
+      },
+      "characteristics": {
+        "market_share": 10,
+        "has_own_brand": true
+      },
+      "innovation": {
+        "rd_ratio_1b": 3,
+        "rd_ratio_50m_1b": 6,
+        "rd_institution": true,
+        "patent_count": 2
+      },
+      "industry_chain": {
+        "supplement_shortage": true,
+        "fill_blank": true,
+        "key_supplier": true
+      },
+      "other_conditions": {
+        "no_major_accident": true,
+        "provincial_specialized": true
+      }
+    },
+    "output_formats": {
+      "market_share_statement": "text",
+      "company_introduction": "text",
+      "supplement_shortage_statement": "text",
+      "application_framework": "json",
+      "proof_materials_list": "json",
+      "assessment_report": "text",
+      "check_report": "text"
+    }
+  },
+  "triggers": [
+    {
+      "type": "keyword",
+      "patterns": [
+        "专精特新",
+        "小巨人",
+        "申报",
+        "企业申报",
+        "政策申报"
+      ]
+    },
+    {
+      "type": "intent",
+      "intent": "enterprise_application"
+    }
+  ],
+  "permissions": {
+    "read_files": true,
+    "write_files": true,
+    "access_network": false,
+    "execute_commands": false
+  },
+  "dependencies": {
+    "python": [
+      "pdfplumber>=0.10.3",
+      "openpyxl>=3.1.2",
+      "python-docx>=1.1.0"
+    ],
+    "system": []
+  },
+  "examples": [
+    {
+      "input": "我想申报专精特新小巨人",
+      "output": "欢迎使用专精特新小巨人申报助手！我将引导您完成申报全流程..."
+    },
+    {
+      "input": "上传企业文档进行申报",
+      "output": "请上传企业相关文档（审计报告、营业执照、专利清单等）..."
+    },
+    {
+      "input": "批量输入企业信息",
+      "output": "请一次性提供企业关键信息，格式如：企业名称：XXX\\n成立时间：XXXX年..."
+    }
+  ],
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2024-01-01",
+      "changes": [
+        "初始版本发布",
+        "支持文档提取、文本解析、对话引导三种信息收集方式",
+        "实现资格评估与指标计算",
+        "生成申报材料框架",
+        "检查佐证材料完整性"
+      ]
+    }
+  ]
+}

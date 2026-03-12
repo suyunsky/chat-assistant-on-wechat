@@ -380,9 +380,34 @@ class AgentBridge:
                 pre_run_len = len(agent.messages)
 
             try:
+                # 如果有文件信息，添加到用户消息中
+                enhanced_query = query
+                if context and context.get("files"):
+                    files = context.get("files", [])
+                    if files:
+                        file_info_text = "\n\n[上传的文件信息：]"
+                        for i, file_info in enumerate(files, 1):
+                            file_path = file_info.get("file_path", "")
+                            file_name = file_info.get("name", "")
+                            file_size = file_info.get("size", 0)
+                            file_type = file_info.get("type", "")
+                            
+                            # 检查文件是否存在
+                            import os
+                            file_exists = os.path.exists(file_path) if file_path else False
+                            file_status = "（文件存在）" if file_exists else "（文件不存在）"
+                            
+                            file_info_text += f"\n{i}. 文件名：{file_name}"
+                            file_info_text += f"\n   类型：{file_type}"
+                            file_info_text += f"\n   大小：{file_size} 字节"
+                            file_info_text += f"\n   路径：{file_path} {file_status}"
+                        
+                        enhanced_query = query + file_info_text
+                        logger.debug(f"[AgentBridge] Added file info to query: {len(files)} file(s)")
+                
                 # Use agent's run_stream method with event handler
                 response = agent.run_stream(
-                    user_message=query,
+                    user_message=enhanced_query,
                     on_event=event_handler.handle_event,
                     clear_history=clear_history
                 )
