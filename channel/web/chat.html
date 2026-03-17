@@ -10,7 +10,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/markdown-it@13.0.1/dist/markdown-it.min.js"></script>
+    <script src="https://unpkg.com/markdown-it@13.0.1/dist/markdown-it.min.js"></script>
     <link id="hljs-light" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
     <link id="hljs-dark" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" disabled>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -230,7 +230,7 @@
                             <p id="welcome-subtitle" class="text-slate-500 dark:text-slate-400 text-center max-w-lg mb-10 leading-relaxed"
                                data-i18n-html="welcome_subtitle">I can help you answer questions, manage your computer, create and execute skills,<br>and keep growing through long-term memory.</p>
 
-                            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-2xl">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full max-w-4xl">
                                 <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4
                                             cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
                                     <div class="flex items-center gap-2 mb-2">
@@ -261,6 +261,16 @@
                                     </div>
                                     <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_code_text">Write a Python web scraper script</p>
                                 </div>
+                                <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4
+                                            cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
+                                    <div class="flex items-center gap-2 mb-2">
+                                        <div class="w-7 h-7 rounded-lg bg-purple-50 dark:bg-purple-900/30 flex items-center justify-center">
+                                            <i class="fas fa-building text-purple-500 text-xs"></i>
+                                        </div>
+                                        <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_business_title">高新技术企业申报</span>
+                                    </div>
+                                    <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_business_text">请开始高企申报</p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -278,7 +288,7 @@
                                             <p class="text-sm text-slate-600 dark:text-slate-400 mb-1" data-i18n="file_upload_drop">拖拽文件到此处或点击选择</p>
                                             <p class="text-xs text-slate-500 dark:text-slate-500" data-i18n="file_upload_types">支持PDF、Excel、Word、图片文件</p>
                                         </div>
-                                        <input type="file" id="file-input" class="hidden" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.txt,.jpg,.jpeg,.png">
+                                        <input type="file" id="file-input" class="hidden" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.txt,.jpg,.jpeg,.png,.zip,.rar,.7z,.tar,.gz">
                                     </div>
                                     <button id="cancel-upload-btn" class="px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-white/5 cursor-pointer transition-colors duration-150 text-sm"
                                             onclick="cancelFileUpload()" data-i18n="file_upload_cancel">取消</button>
@@ -339,7 +349,7 @@
                                     </div>
                                     
                                     <!-- 隐藏的文件输入 -->
-                                    <input type="file" id="file-input-dialog" class="hidden" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.txt,.jpg,.jpeg,.png">
+                                    <input type="file" id="file-input-dialog" class="hidden" multiple accept=".pdf,.xlsx,.xls,.docx,.doc,.txt,.jpg,.jpeg,.png,.zip,.rar,.7z,.tar,.gz">
                                 </div>
                             </div>
                         </div>

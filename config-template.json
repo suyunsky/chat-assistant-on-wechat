@@ -28,5 +28,7 @@
   "agent": true,
   "agent_max_context_tokens": 40000,
   "agent_max_context_turns": 20,
-  "agent_max_steps": 15
+  "agent_max_steps": 15,
+  "baidu_ocr_api_key": "",
+  "baidu_ocr_secret_key": ""
 }

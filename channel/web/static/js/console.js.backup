@@ -21,7 +21,6 @@ const I18N = {
         example_sys_title: '系统管理', example_sys_text: '帮我查看工作空间里有哪些文件',
         example_task_title: '智能任务', example_task_text: '提醒我5分钟后查看服务器情况',
         example_code_title: '编程助手', example_code_text: '帮我编写一个Python爬虫脚本',
-        example_business_title: '高新技术企业申报', example_business_text: '请开始高企申报',
         input_placeholder: '输入消息...',
         config_title: '配置管理', config_desc: '管理模型和 Agent 配置',
         config_model: '模型配置', config_agent: 'Agent 配置',
@@ -68,7 +67,6 @@ const I18N = {
         example_sys_title: 'System', example_sys_text: 'Show me the files in the workspace',
         example_task_title: 'Smart Task', example_task_text: 'Remind me to check the server in 5 minutes',
         example_code_title: 'Coding', example_code_text: 'Write a Python web scraper script',
-        example_business_title: 'Business', example_business_text: 'Start enterprise declaration process',
         input_placeholder: 'Type a message...',
         config_title: 'Configuration', config_desc: 'Manage model and agent settings',
         config_model: 'Model Configuration', config_agent: 'Agent Configuration',
@@ -392,32 +390,10 @@ function sendMessage() {
 }
 
 function startSSE(requestId, loadingEl, timestamp) {
-    // 使用Last-Event-ID机制支持断点续传
-    let lastEventId = 0;
     let es = null;
-    
-    function createEventSource() {
-        const url = `/stream?request_id=${encodeURIComponent(requestId)}&last_event_id=${lastEventId}`;
-        es = new EventSource(url);
-        activeStreams[requestId] = es;
-        
-        // 设置重连时间（服务器可以通过retry字段控制）
-        es.onopen = function() {
-            console.log(`SSE连接已建立，Last-Event-ID: ${lastEventId}`);
-        };
-        
-        es.onerror = function(e) {
-            console.error('SSE连接错误:', e);
-            // EventSource会自动重连，我们只需要记录错误
-            if (es.readyState === EventSource.CLOSED) {
-                console.log('SSE连接已关闭，等待自动重连...');
-            }
-        };
-        
-        return es;
-    }
-    
-    es = createEventSource();
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 3;
+    const reconnectDelay = 2000; // 2 seconds
     
     let botEl = null;
     let stepsEl = null;    // .agent-steps  (thinking summaries + tool indicators)
@@ -446,131 +422,58 @@ function startSSE(requestId, loadingEl, timestamp) {
         contentEl = botEl.querySelector('.answer-content');
     }
 
-    es.onmessage = function(e) {
-        let item;
-        try { item = JSON.parse(e.data); } catch (_) { return; }
+    function connect() {
+        es = new EventSource(`/stream?request_id=${encodeURIComponent(requestId)}`);
+        activeStreams[requestId] = es;
 
-        if (item.type === 'delta') {
-            ensureBotEl();
-            accumulatedText += item.content;
-            contentEl.innerHTML = renderMarkdown(accumulatedText);
-            scrollChatToBottom();
+        es.onopen = function() {
+            reconnectAttempts = 0; // Reset reconnect attempts on successful connection
+            console.log(`SSE连接已建立: ${requestId}`);
+        };
 
-        } else if (item.type === 'tool_start') {
-            ensureBotEl();
+        es.onmessage = function(e) {
+            let item;
+            try { item = JSON.parse(e.data); } catch (_) { return; }
 
-            // Save current thinking as a collapsible step
-            if (accumulatedText.trim()) {
-                const fullText = accumulatedText.trim();
-                const oneLine = fullText.replace(/\n+/g, ' ');
-                const needsTruncate = oneLine.length > 80;
-                const stepEl = document.createElement('div');
-                stepEl.className = 'agent-step agent-thinking-step' + (needsTruncate ? '' : ' no-expand');
-                if (needsTruncate) {
-                    const truncated = oneLine.substring(0, 80) + '…';
-                    stepEl.innerHTML = `
-                        <div class="thinking-header" onclick="this.parentElement.classList.toggle('expanded')">
-                            <i class="fas fa-lightbulb text-amber-400 flex-shrink-0"></i>
-                            <span class="thinking-summary">${escapeHtml(truncated)}</span>
-                            <i class="fas fa-chevron-right thinking-chevron"></i>
-                        </div>
-                        <div class="thinking-full">${renderMarkdown(fullText)}</div>`;
-                } else {
-                    stepEl.innerHTML = `
-                        <div class="thinking-header no-toggle">
-                            <i class="fas fa-lightbulb text-amber-400 flex-shrink-0"></i>
-                            <span>${escapeHtml(oneLine)}</span>
-                        </div>`;
+            if (item.type === 'delta') {
+                ensureBotEl();
+                accumulatedText += item.content;
+                contentEl.innerHTML = renderMarkdown(accumulatedText);
+                scrollChatToBottom();
+
+            } else if (item.type === 'tool_start') {
+                ensureBotEl();
+
+                // Save current thinking as a collapsible step
+                if (accumulatedText.trim()) {
+                    const fullText = accumulatedText.trim();
+                    const oneLine = fullText.replace(/\n+/g, ' ');
+                    const needsTruncate = oneLine.length > 80;
+                    const stepEl = document.createElement('div');
+                    stepEl.className = 'agent-step agent-thinking-step' + (needsTruncate ? '' : ' no-expand');
+                    if (needsTruncate) {
+                        const truncated = oneLine.substring(0, 80) + '…';
+                        stepEl.innerHTML = `
+                            <div class="thinking-header" onclick="this.parentElement.classList.toggle('expanded')">
+                                <i class="fas fa-lightbulb text-amber-400 flex-shrink-0"></i>
+                                <span class="thinking-summary">${escapeHtml(truncated)}</span>
+                                <i class="fas fa-chevron-right thinking-chevron"></i>
+                            </div>
+                            <div class="thinking-full">${renderMarkdown(fullText)}</div>`;
+                    } else {
+                        stepEl.innerHTML = `
+                            <div class="thinking-header no-toggle">
+                                <i class="fas fa-lightbulb text-amber-400 flex-shrink-0"></i>
+                                <span>${escapeHtml(oneLine)}</span>
+                            </div>`;
+                    }
+                    stepsEl.appendChild(stepEl);
                 }
-                stepsEl.appendChild(stepEl);
-            }
-            accumulatedText = '';
-            contentEl.innerHTML = '';
+                accumulatedText = '';
+                contentEl.innerHTML = '';
 
-            // Add tool execution indicator (collapsible)
-            currentToolEl = document.createElement('div');
-            currentToolEl.className = 'agent-step agent-tool-step';
-            const argsStr = formatToolArgs(item.arguments || {});
-            currentToolEl.innerHTML = `
-                <div class="tool-header" onclick="this.parentElement.classList.toggle('expanded')">
-                    <i class="fas fa-cog fa-spin text-primary-400 flex-shrink-0 tool-icon"></i>
-                    <span class="tool-name">${item.tool}</span>
-                    <i class="fas fa-chevron-right tool-chevron"></i>
-                </div>
-                <div class="tool-detail">
-                    <div class="tool-detail-section">
-                        <div class="tool-detail-label">Input</div>
-                        <pre class="tool-detail-content">${argsStr}</pre>
-                    </div>
-                    <div class="tool-detail-section tool-output-section"></div>
-                </div>`;
-            stepsEl.appendChild(currentToolEl);
-
-            scrollChatToBottom();
-
-        } else if (item.type === 'tool_end') {
-            if (currentToolEl) {
-                const isError = item.status !== 'success';
-                const icon = currentToolEl.querySelector('.tool-icon');
-                icon.className = isError
-                    ? 'fas fa-times text-red-400 flex-shrink-0 tool-icon'
-                    : 'fas fa-check text-primary-400 flex-shrink-0 tool-icon';
-
-                // Show execution time
-                const nameEl = currentToolEl.querySelector('.tool-name');
-                if (item.execution_time !== undefined) {
-                    nameEl.innerHTML += ` <span class="tool-time">${item.execution_time}s</span>`;
-                }
-
-                // Fill output section
-                const outputSection = currentToolEl.querySelector('.tool-output-section');
-                if (outputSection && item.result) {
-                    outputSection.innerHTML = `
-                        <div class="tool-detail-label">${isError ? 'Error' : 'Output'}</div>
-                        <pre class="tool-detail-content ${isError ? 'tool-error-text' : ''}">${escapeHtml(String(item.result))}</pre>`;
-                }
-
-                if (isError) currentToolEl.classList.add('tool-failed');
-                currentToolEl = null;
-            }
-
-        } else if (item.type === 'done') {
-            es.close();
-            delete activeStreams[requestId];
-
-            const finalText = item.content || accumulatedText;
-
-            if (!botEl && finalText) {
-                if (loadingEl) { loadingEl.remove(); loadingEl = null; }
-                addBotMessage(finalText, new Date((item.timestamp || Date.now() / 1000) * 1000), requestId);
-            } else if (botEl) {
-                contentEl.classList.remove('sse-streaming');
-                if (finalText) contentEl.innerHTML = renderMarkdown(finalText);
-                applyHighlighting(botEl);
-            }
-            scrollChatToBottom();
-
-        } else if (item.type === 'error') {
-            es.close();
-            delete activeStreams[requestId];
-            if (loadingEl) { loadingEl.remove(); loadingEl = null; }
-            addBotMessage(t('error_send'), new Date());
-        }
-    };
-
-    es.onerror = function() {
-        es.close();
-        delete activeStreams[requestId];
-        if (loadingEl) { loadingEl.remove(); loadingEl = null; }
-        if (!botEl) {
-            addBotMessage(t('error_send'), new Date());
-        } else if (accumulatedText) {
-            contentEl.classList.remove('sse-streaming');
-            contentEl.innerHTML = renderMarkdown(accumulatedText);
-            applyHighlighting(botEl);
-        }
-    };
-}
+                // Add tool execution indicator (collapsible)
+                currentToolEl = document.createElement('div
 
 function startPolling() {
     if (isPolling) return;
@@ -768,7 +671,7 @@ function addLoadingIndicator() {
 }
 
 function newChat() {
-// Close all active SSE connections for the current session
+    // Close all active SSE connections for the current session
     Object.values(activeStreams).forEach(es => { try { es.close(); } catch (_) {} });
     activeStreams = {};
 
@@ -785,7 +688,7 @@ function newChat() {
         <img src="assets/logo.jpg" alt="CowAgent" class="w-16 h-16 rounded-2xl mb-6 shadow-lg shadow-primary-500/20">
         <h1 class="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">${appConfig.title || 'CowAgent'}</h1>
         <p class="text-slate-500 dark:text-slate-400 text-center max-w-lg mb-10 leading-relaxed" data-i18n="welcome_subtitle">${t('welcome_subtitle')}</p>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 w-full max-w-4xl">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 w-full max-w-2xl">
             <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
                 <div class="flex items-center gap-2 mb-2">
                     <div class="w-7 h-7 rounded-lg bg-blue-50 dark:bg-blue-900/30 flex items-center justify-center">
@@ -812,15 +715,6 @@ function newChat() {
                     <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_code_title">${t('example_code_title')}</span>
                 </div>
                 <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_code_text">${t('example_code_text')}</p>
-            </div>
-            <div class="example-card group bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-xl p-4 cursor-pointer hover:border-primary-300 dark:hover:border-primary-600 hover:shadow-md transition-all duration-200">
-                <div class="flex items-center gap-2 mb-2">
-                    <div class="w-7 h-7 rounded-lg bg-purple-50 dark:bg-purple-900/30 flex items-center justify-center">
-                        <i class="fas fa-building text-purple-500 text-xs"></i>
-                    </div>
-                    <span class="font-medium text-sm text-slate-700 dark:text-slate-200" data-i18n="example_business_title">${t('example_business_title')}</span>
-                </div>
-                <p class="text-sm text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="example_business_text">${t('example_business_text')}</p>
             </div>
         </div>
     `;
@@ -1978,7 +1872,7 @@ function handleDialogFileSelection(event) {
         const file = files[i];
         
         // 检查文件类型
-        const allowedTypes = ['.pdf', '.xlsx', '.xls', '.docx', '.doc', '.txt', '.jpg', '.jpeg', '.png', '.zip', '.rar', '.7z', '.tar', '.gz'];
+        const allowedTypes = ['.pdf', '.xlsx', '.xls', '.docx', '.doc', '.txt', '.jpg', '.jpeg', '.png'];
         const fileExt = '.' + file.name.split('.').pop().toLowerCase();
         
         if (!allowedTypes.includes(fileExt)) {
@@ -2042,12 +1936,7 @@ function getFileIcon(fileExt) {
         '.txt': 'fa-file-lines',
         '.jpg': 'fa-file-image',
         '.jpeg': 'fa-file-image',
-        '.png': 'fa-file-image',
-        '.zip': 'fa-file-zipper',
-        '.rar': 'fa-file-zipper',
-        '.7z': 'fa-file-zipper',
-        '.tar': 'fa-file-zipper',
-        '.gz': 'fa-file-zipper'
+        '.png': 'fa-file-image'
     };
     return iconMap[fileExt] || 'fa-file';
 }

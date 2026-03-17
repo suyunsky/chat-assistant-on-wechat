@@ -920,12 +920,61 @@ class AgentStreamExecutor:
           (e.g. process was interrupted mid-execution)
         - Orphaned tool_result at the start of messages (e.g. after context
           trimming removed the preceding assistant tool_use)
+        - Fix message format for different LLM providers (OpenAI vs Claude)
         """
         if not self.messages:
             return
 
         removed = 0
+        fixed = 0
 
+        # 首先检查消息格式，确保符合当前LLM提供者的要求
+        # 不同提供者使用不同的消息格式：
+        # - OpenAI: 使用 "tool_calls" 和 "tool" 角色
+        # - Claude: 使用 "tool_use" 和 "tool_result" 类型
+        
+        # 检查当前模型类型
+        model_name = getattr(self.model, 'model', '').lower()
+        is_claude = 'claude' in model_name
+        is_openai = 'gpt' in model_name or 'openai' in model_name
+        
+        # 修复消息格式
+        for i, msg in enumerate(self.messages):
+            role = msg.get("role")
+            content = msg.get("content", [])
+            
+            # 修复Claude格式的消息
+            if is_claude:
+                if role == "assistant":
+                    # 确保assistant消息使用正确的格式
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict):
+                                # 修复tool_use格式
+                                if block.get("type") == "tool_use":
+                                    # 确保有id、name和input字段
+                                    if "id" not in block:
+                                        import uuid
+                                        block["id"] = f"call_{uuid.uuid4().hex[:24]}"
+                                        fixed += 1
+                                    if "input" not in block and "arguments" in block:
+                                        block["input"] = block.pop("arguments")
+                                        fixed += 1
+                elif role == "user":
+                    # 确保user消息中的tool_result格式正确
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                # 确保有tool_use_id字段
+                                if "tool_use_id" not in block and "tool_call_id" in block:
+                                    block["tool_use_id"] = block.pop("tool_call_id")
+                                    fixed += 1
+            # 修复OpenAI格式的消息
+            elif is_openai:
+                if role == "assistant":
+                    # OpenAI使用不同的格式，这里暂时不处理
+                    pass
+        
         # Remove trailing incomplete tool_use assistant messages
         while self.messages:
             last_msg = self.messages[-1]
@@ -959,8 +1008,51 @@ class AgentStreamExecutor:
                     continue
             break
 
-        if removed > 0:
-            logger.info(f"🔧 Message validation: removed {removed} broken message(s)")
+        # 检查tool_use和tool_result的匹配
+        tool_use_ids = set()
+        tool_result_ids = set()
+        
+        for msg in self.messages:
+            role = msg.get("role")
+            content = msg.get("content", [])
+            
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "tool_use" and "id" in block:
+                            tool_use_ids.add(block["id"])
+                        elif block.get("type") == "tool_result" and "tool_use_id" in block:
+                            tool_result_ids.add(block["tool_use_id"])
+        
+        # 检查未匹配的tool_result
+        unmatched_results = tool_result_ids - tool_use_ids
+        if unmatched_results:
+            logger.warning(f"⚠️ Found {len(unmatched_results)} unmatched tool_result(s)")
+            # 移除未匹配的tool_result
+            for i in range(len(self.messages) - 1, -1, -1):
+                msg = self.messages[i]
+                if msg.get("role") == "user":
+                    content = msg.get("content", [])
+                    if isinstance(content, list):
+                        new_content = []
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "tool_result":
+                                if block.get("tool_use_id") in unmatched_results:
+                                    logger.warning(f"  Removing unmatched tool_result for tool_use_id: {block.get('tool_use_id')}")
+                                    removed += 1
+                                    continue
+                            new_content.append(block)
+                        
+                        if new_content != content:
+                            if new_content:
+                                self.messages[i]["content"] = new_content
+                            else:
+                                # 如果user消息变为空，移除整个消息
+                                self.messages.pop(i)
+                                removed += 1
+
+        if removed > 0 or fixed > 0:
+            logger.info(f"🔧 Message validation: removed {removed} broken message(s), fixed {fixed} format issue(s)")
 
     def _identify_complete_turns(self) -> List[Dict]:
         """

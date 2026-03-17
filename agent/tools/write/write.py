@@ -50,6 +50,76 @@ class Write(BaseTool):
         if not path:
             return ToolResult.fail("Error: path parameter is required")
         
+        # 检查是否是"企业申报"相关的文件
+        # 通过上下文判断当前是否在企业申报任务中
+        is_enterprise_declaration = False
+        company_name = None
+        
+        # 从上下文获取信息
+        if hasattr(self, 'context') and self.context:
+            # 检查对话历史中是否包含"企业申报"关键词
+            import re
+            conversation_text = str(self.context).lower()
+            if any(keyword in conversation_text for keyword in [
+                '企业申报', 'enterprise declaration', 'business declaration',
+                '营业执照', '税务登记', '组织机构代码', '开户许可证',
+                '申报材料', '申报文件', '申报资料'
+            ]):
+                is_enterprise_declaration = True
+                
+                # 尝试从对话中提取企业名称
+                company_patterns = [
+                    r'([\u4e00-\u9fa5a-zA-Z0-9]+公司)',
+                    r'([\u4e00-\u9fa5a-zA-Z0-9]+企业)',
+                    r'([\u4e00-\u9fa5a-zA-Z0-9]+集团)',
+                    r'([\u4e00-\u9fa5a-zA-Z0-9]+有限公司)',
+                    r'([\u4e00-\u9fa5a-zA-Z0-9]+有限责任公司)',
+                    r'company[:\s]+([\u4e00-\u9fa5a-zA-Z0-9]+)',
+                    r'enterprise[:\s]+([\u4e00-\u9fa5a-zA-Z0-9]+)',
+                    r'企业名称[：:\s]+([\u4e00-\u9fa5a-zA-Z0-9]+)',
+                    r'公司名称[：:\s]+([\u4e00-\u9fa5a-zA-Z0-9]+)'
+                ]
+                
+                for pattern in company_patterns:
+                    match = re.search(pattern, conversation_text, re.IGNORECASE)
+                    if match:
+                        company_name = match.group(1)
+                        break
+                
+                if not company_name:
+                    company_name = "未命名企业"
+        
+        # 如果是企业申报文件，重新组织路径
+        if is_enterprise_declaration:
+            # 创建企业申报根目录
+            enterprise_root_dir = os.path.join(os.getcwd(), "企业申报")
+            if not os.path.exists(enterprise_root_dir):
+                os.makedirs(enterprise_root_dir, exist_ok=True)
+                print(f"[Write Tool] 创建企业申报根目录: {enterprise_root_dir}")
+            
+            # 创建企业专属文件夹
+            company_dir = os.path.join(enterprise_root_dir, company_name)
+            if not os.path.exists(company_dir):
+                os.makedirs(company_dir, exist_ok=True)
+                print(f"[Write Tool] 创建企业专属文件夹: {company_dir}")
+            
+            # 获取原始文件名
+            original_filename = os.path.basename(path)
+            
+            # 如果路径已经是绝对路径，只取文件名
+            if os.path.isabs(path):
+                original_filename = os.path.basename(path)
+            
+            # 构建新的文件路径（直接放在企业专属文件夹中，不按日期分）
+            new_path = os.path.join(company_dir, original_filename)
+            
+            # 记录重定向信息
+            print(f"[Write Tool] 企业申报文件重定向: {path} -> {new_path}")
+            print(f"[Write Tool] 企业名称: {company_name}")
+            
+            # 使用新的路径
+            path = new_path
+        
         # Resolve path
         absolute_path = self._resolve_path(path)
         
@@ -75,6 +145,14 @@ class Write(BaseTool):
                 "path": path,
                 "bytes_written": bytes_written
             }
+            
+            # 如果是企业申报文件，添加额外信息
+            if is_enterprise_declaration:
+                result["enterprise_declaration"] = True
+                result["company_name"] = company_name
+                result["original_path"] = args.get("path", "")
+                result["message"] = f"企业申报文件已保存到企业专属目录: {company_name}/{original_filename}"
+                result["company_directory"] = company_dir
             
             return ToolResult.success(result)
             

@@ -14,6 +14,9 @@ from agent.tools.send.send import Send
 from agent.tools.memory.memory_search import MemorySearchTool
 from agent.tools.memory.memory_get import MemoryGetTool
 
+# Import OCR tools
+from agent.tools.ocr.ocr_tool import OCRTool
+
 # Import tools with optional dependencies
 def _import_optional_tools():
     """Import tools that have optional dependencies"""
@@ -99,6 +102,7 @@ __all__ = [
     'Send',
     'MemorySearchTool',
     'MemoryGetTool',
+    'OCRTool',
     'EnvConfig',
     'SchedulerTool',
     'WebSearch',

@@ -213,32 +213,112 @@ class WebChannel(ChatChannel):
 
     def stream_response(self, request_id: str):
         """
-        SSE generator for a given request_id.
+        SSE generator for a given request_id with Last-Event-ID support.
         Yields UTF-8 encoded bytes to avoid WSGI Latin-1 mangling.
         """
-        if request_id not in self.sse_queues:
+        import web
+        params = web.input(request_id='', last_event_id='0')
+        request_id = params.request_id
+        last_event_id = int(params.last_event_id or '0')
+        
+        if not request_id or request_id not in self.sse_queues:
+            logger.error(f"[WebChannel] SSE连接失败: 无效的request_id={request_id}, 可用队列: {list(self.sse_queues.keys())}")
             yield b"data: {\"type\": \"error\", \"message\": \"invalid request_id\"}\n\n"
             return
 
         q = self.sse_queues[request_id]
         timeout = 300  # 5 minutes max
         deadline = time.time() + timeout
+        
+        # 设置重连时间（2秒）
+        yield b"retry: 2000\n\n"
+        
+        # 事件计数器
+        event_counter = last_event_id
+        
+        # 记录连接开始
+        logger.info(f"[WebChannel] SSE连接建立: request_id={request_id}, last_event_id={last_event_id}, 队列大小={q.qsize()}")
+        print(f"🔗 SSE连接建立: request_id={request_id}, 从事件{last_event_id}开始")
 
         try:
+            # 如果last_event_id > 0，说明客户端已经收到了一些事件
+            # 我们需要跳过这些事件（在队列中无法跳过，但可以记录日志）
+            if last_event_id > 0:
+                logger.info(f"[WebChannel] SSE断点续传: request_id={request_id}, last_event_id={last_event_id}")
+                print(f"🔄 SSE断点续传: request_id={request_id}, 从事件{last_event_id}继续")
+            
             while time.time() < deadline:
                 try:
                     item = q.get(timeout=1)
                 except Empty:
+                    # 发送心跳保持连接
                     yield b": keepalive\n\n"
                     continue
 
+                # 增加事件计数器
+                event_counter += 1
+                
+                # 添加事件ID
+                item["id"] = event_counter
+                
                 payload = json.dumps(item, ensure_ascii=False)
-                yield f"data: {payload}\n\n".encode("utf-8")
+                
+                # 发送带事件ID的消息
+                yield f"id: {event_counter}\ndata: {payload}\n\n".encode("utf-8")
+                
+                # 记录发送的事件
+                event_type = item.get("type", "unknown")
+                logger.debug(f"[WebChannel] SSE事件发送: request_id={request_id}, event_id={event_counter}, type={event_type}")
+                if event_type in ["delta", "tool_start", "tool_end"]:
+                    print(f"📤 SSE事件发送: request_id={request_id[:8]}..., event_id={event_counter}, type={event_type}")
 
                 if item.get("type") == "done":
+                    logger.info(f"[WebChannel] SSE完成: request_id={request_id}, 总事件数={event_counter}")
+                    print(f"✅ SSE完成: request_id={request_id[:8]}..., 总事件数={event_counter}")
                     break
+                    
+        except GeneratorExit:
+            # 客户端主动断开连接
+            logger.info(f"[WebChannel] SSE连接断开: request_id={request_id}, 最后事件ID={event_counter}")
+            print(f"🔌 SSE连接断开: request_id={request_id[:8]}..., 最后事件ID={event_counter}")
+            raise
+        except Exception as e:
+            logger.error(f"[WebChannel] SSE错误: request_id={request_id}, 错误: {e}")
+            print(f"❌ SSE错误: request_id={request_id[:8]}..., 错误: {e}")
         finally:
-            self.sse_queues.pop(request_id, None)
+            # 记录连接结束
+            logger.info(f"[WebChannel] SSE连接结束: request_id={request_id}, 最后事件ID={event_counter}")
+            print(f"🔚 SSE连接结束: request_id={request_id[:8]}..., 最后事件ID={event_counter}")
+            
+            # 不要立即清理队列！保留队列以便客户端重连
+            # 队列会在以下情况下清理：
+            # 1. 客户端收到"done"事件后主动关闭连接
+            # 2. 超时后由定时任务清理
+            # 3. 新的请求覆盖旧的request_id
+            
+            # 设置一个延迟清理任务（30秒后）
+            def delayed_cleanup():
+                time.sleep(30)  # 等待30秒，给客户端充足的重连时间
+                if request_id in self.sse_queues:
+                    # 检查队列是否还有未处理的项目
+                    try:
+                        # 尝试获取一个项目，如果队列为空会抛出Empty异常
+                        item = self.sse_queues[request_id].get(block=False)
+                        # 如果还有项目，放回去（说明客户端可能还在重连）
+                        self.sse_queues[request_id].put(item)
+                        logger.info(f"[WebChannel] SSE队列仍有项目，暂不清理: request_id={request_id}, 队列大小={self.sse_queues[request_id].qsize()}")
+                        print(f"📦 SSE队列仍有项目: request_id={request_id[:8]}..., 队列大小={self.sse_queues[request_id].qsize()}")
+                    except Empty:
+                        # 队列为空，可以安全清理
+                        self.sse_queues.pop(request_id, None)
+                        logger.info(f"[WebChannel] SSE队列清理: request_id={request_id}")
+                        print(f"🗑️ SSE队列清理: request_id={request_id[:8]}...")
+                    except Exception as e:
+                        logger.error(f"[WebChannel] SSE队列检查错误: {e}")
+                        print(f"⚠️ SSE队列检查错误: {e}")
+                
+            import threading
+            threading.Thread(target=delayed_cleanup, daemon=True).start()
 
     def poll_response(self):
         """
@@ -1125,7 +1205,7 @@ class FileUploadHandler:
                 return json.dumps({"status": "error", "message": "No file provided"})
             
             # 验证文件类型
-            allowed_extensions = {'.pdf', '.xlsx', '.xls', '.docx', '.doc', '.txt', '.jpg', '.jpeg', '.png'}
+            allowed_extensions = {'.pdf', '.xlsx', '.xls', '.docx', '.doc', '.txt', '.jpg', '.jpeg', '.png', '.zip', '.rar', '.7z', '.tar', '.gz'}
             file_ext = os.path.splitext(file_data.filename.lower())[1]
             if file_ext not in allowed_extensions:
                 return json.dumps({
