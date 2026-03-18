@@ -1213,8 +1213,8 @@ class FileUploadHandler:
                     "message": f"File type not allowed. Allowed types: {', '.join(allowed_extensions)}"
                 })
             
-            # 验证文件大小 (最大10MB)
-            max_size = 10 * 1024 * 1024  # 10MB
+            # 验证文件大小 (最大200MB)
+            max_size = 200 * 1024 * 1024  # 200MB
             file_data.file.seek(0, 2)  # 移动到文件末尾
             file_size = file_data.file.tell()
             file_data.file.seek(0)  # 重置到文件开头

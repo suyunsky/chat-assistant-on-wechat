@@ -1988,11 +1988,11 @@ function handleDialogFileSelection(event) {
             continue;
         }
         
-        // 检查文件大小 (最大10MB)
-        if (file.size > 10 * 1024 * 1024) {
+        // 检查文件大小 (最大200MB)
+        if (file.size > 200 * 1024 * 1024) {
             alert(currentLang === 'zh'
-                ? `文件太大: ${file.name}\n最大支持10MB`
-                : `File too large: ${file.name}\nMaximum size is 10MB`);
+                ? `文件太大: ${file.name}\n最大支持200MB`
+                : `File too large: ${file.name}\nMaximum size is 200MB`);
             continue;
         }
         
