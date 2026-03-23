@@ -130,6 +130,54 @@ class WebChannel(ChatChannel):
                 if delta:
                     q.put({"type": "delta", "content": delta})
 
+            elif event_type == "step_complete":
+                # 发送步骤完成事件，让前端可以显示独立的步骤
+                turn = data.get("turn", 0)
+                assistant_msg = data.get("assistant_msg", "")
+                tool_calls = data.get("tool_calls", [])
+                is_final = data.get("is_final", False)
+                
+                # 构建工具调用信息
+                tool_calls_info = []
+                for tc in tool_calls:
+                    tool_calls_info.append({
+                        "name": tc.get("name", ""),
+                        "arguments": tc.get("arguments", {}),
+                        "id": tc.get("id", "")
+                    })
+                
+                q.put({
+                    "type": "step_complete",
+                    "data": {
+                        "turn": turn,
+                        "assistant_msg": assistant_msg,
+                        "tool_calls": tool_calls_info,
+                        "is_final": is_final
+                    }
+                })
+
+            elif event_type == "tool_results_complete":
+                # 发送工具结果完成事件
+                turn = data.get("turn", 0)
+                tool_results = data.get("tool_results", [])
+                
+                # 构建工具结果信息
+                tool_results_info = []
+                for tr in tool_results:
+                    tool_results_info.append({
+                        "content": tr.get("content", ""),
+                        "is_error": tr.get("is_error", False),
+                        "tool_use_id": tr.get("tool_use_id", "")
+                    })
+                
+                q.put({
+                    "type": "tool_results_complete",
+                    "data": {
+                        "turn": turn,
+                        "tool_results": tool_results_info
+                    }
+                })
+
             elif event_type == "tool_execution_start":
                 tool_name = data.get("tool_name", "tool")
                 arguments = data.get("arguments", {})

@@ -21,7 +21,7 @@ class OCRTool(BaseTool):
     
     # 类属性
     name = "ocr_image"
-    description = "识别图片中的文字内容，支持中文、英文等多种语言，可用于发票、文档、名片等图片的文字提取"
+    description = "识别图片中的文字内容，支持中文、英文等多种语言，可用于发票、文档、名片、表格等图片的文字提取。当识别类型为'table'时，会自动使用百度OCR表格识别接口，返回结构化表格数据和Excel格式数据。"
     params = {
         "type": "object",
         "properties": {
@@ -37,7 +37,7 @@ class OCRTool(BaseTool):
             },
             "recognize_type": {
                 "type": "string",
-                "description": "识别类型，针对不同类型优化识别",
+                "description": "识别类型，针对不同类型优化识别。当选择'table'时，会使用百度OCR表格识别专用接口，返回结构化表格数据和Excel格式数据。",
                 "enum": ["general", "receipt", "business_card", "document", "table", "handwriting", "formula"],
                 "default": "general"
             },
@@ -177,6 +177,25 @@ class OCRTool(BaseTool):
             
             image_base64 = base64.b64encode(image_data).decode('utf-8')
             
+            # 根据识别类型选择不同的接口
+            if recognize_type == "table":
+                # 使用表格识别专用接口
+                return self._recognize_table_with_baidu_ocr(access_token, image_base64, start_time)
+            else:
+                # 使用通用接口
+                return self._recognize_general_with_baidu_ocr(access_token, image_base64, language, recognize_type, start_time)
+            
+        except Exception as e:
+            logger.error(f"[OCR] 百度OCR识别异常: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "engine": "baidu_ocr"
+            }
+    
+    def _recognize_general_with_baidu_ocr(self, access_token: str, image_base64: str, language: str, recognize_type: str, start_time: float) -> Dict:
+        """使用百度OCR通用接口识别文字"""
+        try:
             # 构建请求参数
             url = "https://aip.baidubce.com/rest/2.0/ocr/v1/general"
             
@@ -197,8 +216,6 @@ class OCRTool(BaseTool):
                 params["recognize_granularity"] = "small"  # 小粒度识别
             elif recognize_type == "document":
                 params["paragraph"] = "true"
-            elif recognize_type == "table":
-                params["table"] = "true"  # 表格识别
             
             # 发送请求
             import requests
@@ -272,11 +289,105 @@ class OCRTool(BaseTool):
             }
             
         except Exception as e:
-            logger.error(f"[OCR] 百度OCR识别异常: {e}")
+            logger.error(f"[OCR] 百度OCR通用接口识别异常: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "engine": "baidu_ocr"
+            }
+    
+    def _recognize_table_with_baidu_ocr(self, access_token: str, image_base64: str, start_time: float) -> Dict:
+        """使用百度OCR表格识别接口"""
+        try:
+            # 构建请求参数
+            url = "https://aip.baidubce.com/rest/2.0/ocr/v1/table"
+            
+            params = {
+                "access_token": access_token,
+                "image": image_base64,
+                "return_excel": "true",  # 返回Excel格式
+                "language_type": "CHN_ENG",  # 中英文混合
+            }
+            
+            # 发送请求
+            import requests
+            headers = {'Content-Type': 'application/x-www-form-urlencoded'}
+            response = requests.post(url, data=params, headers=headers)
+            result = response.json()
+            
+            execution_time = time.time() - start_time
+            
+            # 检查响应
+            if 'error_code' in result:
+                error_msg = result.get('error_msg', '未知错误')
+                logger.error(f"[OCR] 百度表格OCR识别失败: {error_msg}")
+                return {
+                    "success": False,
+                    "error": f"百度表格OCR识别失败: {error_msg}",
+                    "engine": "baidu_ocr_table"
+                }
+            
+            # 解析表格结果
+            text_lines = []
+            table_data = []
+            excel_data = None
+            
+            if 'forms_result' in result:
+                forms = result['forms_result']
+                for form in forms:
+                    # 提取表格标题
+                    if 'title' in form and form['title']:
+                        text_lines.append(f"表格标题: {form['title']}")
+                    
+                    # 提取表格内容
+                    if 'body' in form:
+                        for row in form['body']:
+                            row_text = []
+                            for cell in row:
+                                if 'word' in cell:
+                                    row_text.append(cell['word'])
+                            if row_text:
+                                table_data.append(row_text)
+                                text_lines.append(" | ".join(row_text))
+            
+            # 检查是否有Excel数据
+            if 'excel_file' in result:
+                excel_data = result['excel_file']
+                logger.info(f"[OCR] 百度表格OCR返回Excel数据，大小: {len(excel_data) if excel_data else 0}字节")
+            
+            # 合并文本
+            text = "\n".join(text_lines)
+            
+            # 表格识别没有置信度信息，设置默认值
+            avg_confidence = 0.9
+            
+            # 识别语言检测
+            detected_lang = self._detect_language(text)
+            
+            logger.info(f"[OCR] 百度表格OCR识别完成: {len(table_data)}行表格数据, 耗时: {execution_time:.2f}s")
+            
+            return {
+                "success": True,
+                "text": text,
+                "lines": text_lines,
+                "table_data": table_data,
+                "excel_data": excel_data,
+                "confidences": [avg_confidence] * len(text_lines) if text_lines else [],
+                "positions": [],
+                "avg_confidence": avg_confidence,
+                "detected_language": detected_lang,
+                "execution_time": execution_time,
+                "line_count": len(text_lines),
+                "char_count": len(text),
+                "engine": "baidu_ocr_table"
+            }
+            
+        except Exception as e:
+            logger.error(f"[OCR] 百度表格OCR识别异常: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "engine": "baidu_ocr_table"
             }
         
     def _init_paddle_ocr(self, language: str = "ch") -> bool:
@@ -565,6 +676,65 @@ class OCRTool(BaseTool):
             return "english"
         else:
             return "mixed"
+    
+    def _detect_table_in_image(self, image_path: str) -> bool:
+        """检测图片中是否包含表格"""
+        try:
+            from PIL import Image
+            import numpy as np
+            
+            # 打开图片
+            img = Image.open(image_path)
+            
+            # 转换为灰度图
+            if img.mode != 'L':
+                img_gray = img.convert('L')
+            else:
+                img_gray = img
+            
+            # 转换为numpy数组
+            img_array = np.array(img_gray)
+            
+            # 计算水平线和垂直线的密度
+            # 使用简单的边缘检测
+            height, width = img_array.shape
+            
+            # 检测水平线（行之间的空白）
+            horizontal_lines = 0
+            for i in range(height - 1):
+                # 检查是否有明显的水平边缘
+                diff = np.abs(img_array[i, :] - img_array[i+1, :])
+                if np.mean(diff) > 30:  # 阈值
+                    horizontal_lines += 1
+            
+            # 检测垂直线（列之间的空白）
+            vertical_lines = 0
+            for j in range(width - 1):
+                # 检查是否有明显的垂直边缘
+                diff = np.abs(img_array[:, j] - img_array[:, j+1])
+                if np.mean(diff) > 30:  # 阈值
+                    vertical_lines += 1
+            
+            # 计算线密度
+            horizontal_density = horizontal_lines / height
+            vertical_density = vertical_lines / width
+            
+            # 如果有足够的水平和垂直线，可能是表格
+            if horizontal_density > 0.05 and vertical_density > 0.05:
+                logger.info(f"[OCR] 检测到表格特征: 水平线密度={horizontal_density:.3f}, 垂直线密度={vertical_density:.3f}")
+                return True
+            
+            # 检查是否有明显的网格模式
+            grid_score = horizontal_density * vertical_density
+            if grid_score > 0.002:
+                logger.info(f"[OCR] 检测到网格特征: 网格分数={grid_score:.5f}")
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.warning(f"[OCR] 表格检测失败: {e}")
+            return False
     
     def _postprocess_text(self, ocr_result: Dict, recognize_type: str, extract_fields: List[str]) -> Dict:
         """文字后处理"""
@@ -982,6 +1152,14 @@ class OCRTool(BaseTool):
             if return_format in ["structured", "both"]:
                 result_data["structured_data"] = processed_result.get("structured_data", {})
                 result_data["extracted_fields"] = processed_result.get("extracted_fields", {})
+            
+            # 如果是表格识别，添加表格数据
+            if recognize_type == "table" and "table_data" in ocr_result:
+                result_data["table_data"] = ocr_result.get("table_data", [])
+                result_data["table_rows"] = len(ocr_result.get("table_data", []))
+                if ocr_result.get("excel_data"):
+                    result_data["excel_data"] = ocr_result.get("excel_data")
+                    logger.info(f"[OCR] 表格识别包含Excel数据，大小: {len(ocr_result.get('excel_data', ''))}字节")
             
             logger.info(f"[OCR] 识别成功: 引擎={engine_used}, {result_data['ocr_info']['line_count']}行, {result_data['ocr_info']['char_count']}字符, 置信度: {result_data['ocr_info']['confidence']:.2f}")
             
