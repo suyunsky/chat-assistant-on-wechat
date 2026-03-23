@@ -509,8 +509,10 @@ class Agent:
 
         # Append only the NEW messages from this execution (thread-safe)
         # This allows concurrent requests to both contribute to history
+        # IMPORTANT: executor.messages starts as a copy of messages_copy, so new messages
+        # are those added after the copy length
         with self.messages_lock:
-            new_messages = executor.messages[original_length:]
+            new_messages = executor.messages[len(messages_copy):]
             self.messages.extend(new_messages)
         
         # Store executor reference for agent_bridge to access files_to_send

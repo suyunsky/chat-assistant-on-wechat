@@ -456,82 +456,72 @@ function startSSE(requestId, loadingEl, timestamp) {
             contentEl.innerHTML = renderMarkdown(accumulatedText);
             scrollChatToBottom();
 
-        } else if (item.type === 'tool_start') {
-            ensureBotEl();
-
-            // Save current thinking as a collapsible step
-            if (accumulatedText.trim()) {
-                const fullText = accumulatedText.trim();
-                const oneLine = fullText.replace(/\n+/g, ' ');
-                const needsTruncate = oneLine.length > 80;
-                const stepEl = document.createElement('div');
-                stepEl.className = 'agent-step agent-thinking-step' + (needsTruncate ? '' : ' no-expand');
-                if (needsTruncate) {
-                    const truncated = oneLine.substring(0, 80) + '…';
-                    stepEl.innerHTML = `
-                        <div class="thinking-header" onclick="this.parentElement.classList.toggle('expanded')">
-                            <i class="fas fa-lightbulb text-amber-400 flex-shrink-0"></i>
-                            <span class="thinking-summary">${escapeHtml(truncated)}</span>
-                            <i class="fas fa-chevron-right thinking-chevron"></i>
-                        </div>
-                        <div class="thinking-full">${renderMarkdown(fullText)}</div>`;
-                } else {
-                    stepEl.innerHTML = `
-                        <div class="thinking-header no-toggle">
-                            <i class="fas fa-lightbulb text-amber-400 flex-shrink-0"></i>
-                            <span>${escapeHtml(oneLine)}</span>
-                        </div>`;
-                }
-                stepsEl.appendChild(stepEl);
+        } else if (item.type === 'step_complete') {
+            // 每个推理步骤作为独立的agent回复显示
+            const turn = item.data.turn || 0;
+            const assistantMsg = item.data.assistant_msg || '';
+            const toolCalls = item.data.tool_calls || [];
+            const isFinal = item.data.is_final || false;
+            
+            // 如果有现有的botEl，先完成它
+            if (botEl && accumulatedText.trim()) {
+                contentEl.classList.remove('sse-streaming');
+                contentEl.innerHTML = renderMarkdown(accumulatedText);
+                applyHighlighting(botEl);
             }
+            
+            // 创建新的独立agent回复
+            const timestamp = new Date();
+            const newBotEl = createBotMessageEl(assistantMsg, timestamp, requestId, toolCalls);
+            
+            // 添加步骤标记
+            if (!isFinal) {
+                const stepIndicator = document.createElement('div');
+                stepIndicator.className = 'text-xs text-slate-400 dark:text-slate-500 mt-2 italic';
+                stepIndicator.textContent = `--- 步骤 ${turn} ---`;
+                newBotEl.querySelector('.msg-content').appendChild(stepIndicator);
+            }
+            
+            // 添加到消息列表
+            messagesDiv.appendChild(newBotEl);
+            
+            // 重置状态
+            botEl = null;
+            stepsEl = null;
+            contentEl = null;
             accumulatedText = '';
-            contentEl.innerHTML = '';
-
-            // Add tool execution indicator (collapsible)
-            currentToolEl = document.createElement('div');
-            currentToolEl.className = 'agent-step agent-tool-step';
-            const argsStr = formatToolArgs(item.arguments || {});
-            currentToolEl.innerHTML = `
-                <div class="tool-header" onclick="this.parentElement.classList.toggle('expanded')">
-                    <i class="fas fa-cog fa-spin text-primary-400 flex-shrink-0 tool-icon"></i>
-                    <span class="tool-name">${item.tool}</span>
-                    <i class="fas fa-chevron-right tool-chevron"></i>
-                </div>
-                <div class="tool-detail">
-                    <div class="tool-detail-section">
-                        <div class="tool-detail-label">Input</div>
-                        <pre class="tool-detail-content">${argsStr}</pre>
-                    </div>
-                    <div class="tool-detail-section tool-output-section"></div>
-                </div>`;
-            stepsEl.appendChild(currentToolEl);
-
+            
             scrollChatToBottom();
 
-        } else if (item.type === 'tool_end') {
-            if (currentToolEl) {
-                const isError = item.status !== 'success';
-                const icon = currentToolEl.querySelector('.tool-icon');
-                icon.className = isError
-                    ? 'fas fa-times text-red-400 flex-shrink-0 tool-icon'
-                    : 'fas fa-check text-primary-400 flex-shrink-0 tool-icon';
-
-                // Show execution time
-                const nameEl = currentToolEl.querySelector('.tool-name');
-                if (item.execution_time !== undefined) {
-                    nameEl.innerHTML += ` <span class="tool-time">${item.execution_time}s</span>`;
-                }
-
-                // Fill output section
-                const outputSection = currentToolEl.querySelector('.tool-output-section');
-                if (outputSection && item.result) {
-                    outputSection.innerHTML = `
-                        <div class="tool-detail-label">${isError ? 'Error' : 'Output'}</div>
-                        <pre class="tool-detail-content ${isError ? 'tool-error-text' : ''}">${escapeHtml(String(item.result))}</pre>`;
-                }
-
-                if (isError) currentToolEl.classList.add('tool-failed');
-                currentToolEl = null;
+        } else if (item.type === 'tool_results_complete') {
+            // 工具执行结果作为独立的agent回复显示
+            const turn = item.data.turn || 0;
+            const toolResults = item.data.tool_results || [];
+            
+            if (toolResults.length > 0) {
+                // 构建工具结果消息
+                let resultsMessage = `**工具执行结果（步骤 ${turn}）：**\n\n`;
+                
+                toolResults.forEach((resultBlock, i) => {
+                    const content = resultBlock.content || '';
+                    const isError = resultBlock.is_error || false;
+                    const statusEmoji = isError ? '❌' : '✅';
+                    
+                    if (typeof content === 'string') {
+                        // 截断长内容
+                        const truncatedContent = content.length > 500 ? 
+                            content.substring(0, 500) + '... [内容过长已截断]' : content;
+                        resultsMessage += `${statusEmoji} **工具 ${i + 1}**：${truncatedContent}\n\n`;
+                    } else {
+                        resultsMessage += `${statusEmoji} **工具 ${i + 1}**：执行完成\n\n`;
+                    }
+                });
+                
+                // 创建独立的agent回复
+                const timestamp = new Date();
+                const newBotEl = createBotMessageEl(resultsMessage, timestamp, requestId);
+                messagesDiv.appendChild(newBotEl);
+                scrollChatToBottom();
             }
 
         } else if (item.type === 'done') {
@@ -704,9 +694,17 @@ function loadHistory(page) {
             }
 
             data.messages.forEach(msg => {
+                // 修复：即使内容为空，也显示消息（可能包含工具调用或其他元数据）
                 const hasContent = msg.content && msg.content.trim();
                 const hasToolCalls = msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0;
-                if (!hasContent && !hasToolCalls) return;
+                
+                // 如果是用户消息且有内容，或者有工具调用，或者我们想显示所有消息
+                if (msg.role === 'user' && !hasContent) {
+                    // 用户消息没有内容，可能是工具结果或其他内部消息
+                    // 可以选择跳过或显示占位符
+                    return;
+                }
+                
                 const ts = new Date(msg.created_at * 1000);
                 const el = msg.role === 'user'
                     ? createUserMessageEl(msg.content, ts)

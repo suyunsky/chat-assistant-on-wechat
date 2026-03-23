@@ -166,9 +166,101 @@ class AgentStreamExecutor:
         if len(self.tool_failure_history) > 50:
             self.tool_failure_history = self.tool_failure_history[-50:]
 
+    def _save_current_step_to_db(self, turn: int, assistant_msg: str, tool_calls: List[Dict]):
+        """
+        将当前推理步骤保存到数据库
+        
+        关键改进：在每个推理步骤后立即保存，这样即使SSE中断，用户也能看到已经完成的步骤
+        
+        Args:
+            turn: 当前轮次
+            assistant_msg: 助手消息
+            tool_calls: 工具调用列表
+        """
+        try:
+            # 获取session_id
+            session_id = getattr(self.agent, '_current_session_id', None)
+            if not session_id:
+                logger.debug(f"[AgentStream] 无session_id，跳过保存步骤{turn}")
+                return
+            
+            # 获取对话存储
+            from agent.memory import get_conversation_store
+            store = get_conversation_store()
+            
+            # 获取channel_type
+            channel_type = getattr(self.agent, 'channel_type', 'web')
+            
+            # 构建助手消息（Claude格式）
+            assistant_message = {
+                "role": "assistant",
+                "content": []
+            }
+            
+            # 添加文本内容
+            if assistant_msg:
+                assistant_message["content"].append({
+                    "type": "text",
+                    "text": assistant_msg
+                })
+            
+            # 添加工具调用
+            if tool_calls:
+                for tc in tool_calls:
+                    assistant_message["content"].append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": tc.get("name", ""),
+                        "input": tc.get("arguments", {})
+                    })
+            
+            # 保存到数据库
+            store.append_messages(session_id, [assistant_message], channel_type=channel_type)
+            logger.debug(f"[AgentStream] 已保存步骤{turn}到数据库: {assistant_msg[:50]}...")
+            
+        except Exception as e:
+            logger.warning(f"[AgentStream] 保存步骤{turn}到数据库失败: {e}")
+    
+    def _save_tool_results_to_db(self, tool_result_blocks: List[Dict]):
+        """
+        将工具执行结果保存到数据库
+        
+        Args:
+            tool_result_blocks: 工具结果块列表
+        """
+        try:
+            # 获取session_id
+            session_id = getattr(self.agent, '_current_session_id', None)
+            if not session_id:
+                logger.debug(f"[AgentStream] 无session_id，跳过保存工具结果")
+                return
+            
+            # 获取对话存储
+            from agent.memory import get_conversation_store
+            store = get_conversation_store()
+            
+            # 获取channel_type
+            channel_type = getattr(self.agent, 'channel_type', 'web')
+            
+            # 构建用户消息（包含工具结果）
+            user_message = {
+                "role": "user",
+                "content": tool_result_blocks
+            }
+            
+            # 保存到数据库
+            store.append_messages(session_id, [user_message], channel_type=channel_type)
+            logger.debug(f"[AgentStream] 已保存工具结果到数据库: {len(tool_result_blocks)}个结果")
+            
+        except Exception as e:
+            logger.warning(f"[AgentStream] 保存工具结果到数据库失败: {e}")
+    
     def run_stream(self, user_message: str) -> str:
         """
         Execute streaming reasoning loop
+        
+        关键改进：每个推理步骤都作为独立的SSE流发送到页面
+        这样每个stream都很小，减少了SSE断链的概率
         
         Args:
             user_message: User message
@@ -221,9 +313,21 @@ class AgentStreamExecutor:
                             logger.info(
                                 f"Memory flush recommended: tokens={current_tokens}, turns={self.agent.memory_manager.flush_manager.turn_count}")
 
-                # Call LLM (enable retry_on_empty for better reliability)
+                # 关键改进：每个推理步骤都作为独立的SSE流
+                # 调用LLM获取回复（包含工具调用）
                 assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=True)
                 final_response = assistant_msg
+
+                # 保存当前步骤到数据库
+                self._save_current_step_to_db(turn, assistant_msg, tool_calls)
+
+                # 关键改进：发送当前步骤完成事件，让前端可以显示这个步骤
+                self._emit_event("step_complete", {
+                    "turn": turn,
+                    "assistant_msg": assistant_msg,
+                    "tool_calls": tool_calls,
+                    "is_final": False
+                })
 
                 # No tool calls, end loop
                 if not tool_calls:
@@ -248,6 +352,17 @@ class AgentStreamExecutor:
                             # 再调用一次 LLM
                             assistant_msg, tool_calls = self._call_llm_stream(retry_on_empty=False)
                             final_response = assistant_msg
+                            
+                            # 保存这个额外的回复
+                            if assistant_msg:
+                                self._save_current_step_to_db(turn, assistant_msg, tool_calls)
+                                # 发送步骤完成事件
+                                self._emit_event("step_complete", {
+                                    "turn": turn,
+                                    "assistant_msg": assistant_msg,
+                                    "tool_calls": tool_calls,
+                                    "is_final": True
+                                })
                             
                             # 如果还是空，才使用 fallback
                             if not assistant_msg and not tool_calls:
@@ -381,6 +496,15 @@ class AgentStreamExecutor:
                             "content": tool_result_blocks
                         })
                         
+                        # 关键改进：保存工具结果到数据库
+                        self._save_tool_results_to_db(tool_result_blocks)
+                        
+                        # 关键改进：发送工具结果完成事件
+                        self._emit_event("tool_results_complete", {
+                            "turn": turn,
+                            "tool_results": tool_result_blocks
+                        })
+                        
                         # Detect potential infinite loop: same tool called multiple times with success
                         # If detected, add a hint to LLM to stop calling tools and provide response
                         if turn >= 3 and len(tool_calls) > 0:
@@ -423,6 +547,15 @@ class AgentStreamExecutor:
                             "role": "user",
                             "content": emergency_blocks
                         })
+                        
+                        # 保存错误结果到数据库
+                        self._save_tool_results_to_db(emergency_blocks)
+                        
+                        # 发送工具结果完成事件
+                        self._emit_event("tool_results_complete", {
+                            "turn": turn,
+                            "tool_results": emergency_blocks
+                        })
 
                 self._emit_event("turn_end", {
                     "turn": turn,
@@ -451,6 +584,15 @@ class AgentStreamExecutor:
                     if summary_response:
                         final_response = summary_response
                         logger.info(f"💭 Summary: {summary_response[:150]}{'...' if len(summary_response) > 150 else ''}")
+                        # 保存总结到数据库
+                        self._save_current_step_to_db(turn, summary_response, summary_tools)
+                        # 发送最终步骤完成事件
+                        self._emit_event("step_complete", {
+                            "turn": turn,
+                            "assistant_msg": summary_response,
+                            "tool_calls": summary_tools,
+                            "is_final": True
+                        })
                     else:
                         # Fallback if model still doesn't respond
                         final_response = (
@@ -1345,7 +1487,7 @@ class AgentStreamExecutor:
         # 从最新轮次开始，反向累加（保持完整轮次）
         kept_turns = []
         accumulated_tokens = 0
-        min_turns = 3  # 尽量保留至少 3 轮，但不强制（避免超出 token 限制）
+        min_turns = 1  # 关键修复：必须至少保留1轮（当前用户消息）
         
         for i, turn in enumerate(reversed(turns)):
             turn_tokens = self._estimate_turn_tokens(turn)
@@ -1357,11 +1499,22 @@ class AgentStreamExecutor:
                 accumulated_tokens += turn_tokens
             else:
                 # 超出限制
-                # 如果还没有保留足够的轮次，且这是最后的机会，尝试保留
+                # 关键修复：如果还没有保留任何轮次，必须强制保留最新一轮
+                if len(kept_turns) == 0:
+                    # 这是最新一轮，必须保留，即使超出限制
+                    kept_turns.insert(0, turn)
+                    accumulated_tokens += turn_tokens
+                    logger.warning(
+                        f"⚠️  最新一轮对话超出token限制但仍被保留 "
+                        f"(~{turn_tokens} tokens, 超出 {max(0, accumulated_tokens - available_tokens)} tokens)"
+                    )
+                    continue
+                
+                # 如果已经保留了至少一轮，检查是否可以保留更多
                 if len(kept_turns) < min_turns and turns_from_end <= min_turns:
-                    # 检查是否严重超出（超出 20% 以上则放弃）
+                    # 检查是否严重超出（超出 50% 以上则放弃）
                     overflow_ratio = (accumulated_tokens + turn_tokens - available_tokens) / available_tokens
-                    if overflow_ratio < 0.2:  # 允许最多超出 20%
+                    if overflow_ratio < 0.5:  # 允许最多超出 50%
                         kept_turns.insert(0, turn)
                         accumulated_tokens += turn_tokens
                         logger.debug(f"   为保留最少轮次，允许超出 {overflow_ratio*100:.1f}%")
@@ -1386,6 +1539,15 @@ class AgentStreamExecutor:
                 f"({old_count} -> {new_count} 条消息，"
                 f"~{current_tokens + system_tokens} -> ~{accumulated_tokens + system_tokens} tokens)"
             )
+        
+        # 关键修复：确保至少有一条用户消息
+        if len(self.messages) == 0 and turns:
+            # 如果所有消息都被清空了，至少保留最新一轮的用户消息
+            latest_turn = turns[-1]
+            user_messages = [msg for msg in latest_turn['messages'] if msg.get('role') == 'user']
+            if user_messages:
+                self.messages = [user_messages[0]]  # 只保留最新的用户消息
+                logger.warning(f"⚠️  所有消息被清空，强制保留最新用户消息 ({len(self.messages)} 条消息)")
 
     def _clear_session_db(self):
         """

@@ -80,8 +80,27 @@ def _extract_display_text(content: Any) -> str:
     Extract the human-readable text portion from a message content value.
     Returns an empty string for tool_use / tool_result blocks.
     """
+    # 如果content是字符串，尝试解析为JSON
     if isinstance(content, str):
-        return content.strip()
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, list):
+                parts = [
+                    b.get("text", "")
+                    for b in parsed
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                return "\n".join(p for p in parts if p).strip()
+            elif isinstance(parsed, dict):
+                # 处理单个字典的情况
+                if parsed.get("type") == "text":
+                    return parsed.get("text", "").strip()
+                return ""
+            else:
+                return content.strip()
+        except:
+            return content.strip()
+    
     if isinstance(content, list):
         parts = [
             b.get("text", "")
@@ -89,6 +108,7 @@ def _extract_display_text(content: Any) -> str:
             if isinstance(b, dict) and b.get("type") == "text"
         ]
         return "\n".join(p for p in parts if p).strip()
+    
     return ""
 
 
@@ -174,6 +194,9 @@ def _group_into_display_turns(
 
     if started:
         groups.append((cur_user, cur_rest))
+    elif rows:  # 如果没有可见的用户消息，但存在消息，创建一个以助手消息开头的组
+        # 将所有消息作为一个组处理
+        groups.append((None, rows))
 
     # ------------------------------------------------------------------ #
     # Pass 2: build display turns from each group
@@ -191,7 +214,7 @@ def _group_into_display_turns(
         # Collect all tool_calls and tool_results from the rest of the group
         all_tool_calls: List[Dict[str, Any]] = []
         tool_results: Dict[str, str] = {}
-        final_text = ""
+        assistant_texts: List[str] = []
         final_ts: Optional[int] = None
 
         for role, content, created_at in rest:
@@ -202,12 +225,22 @@ def _group_into_display_turns(
                 all_tool_calls.extend(tcs)
                 t = _extract_display_text(content)
                 if t:
-                    final_text = t
+                    assistant_texts.append(t)
                 final_ts = created_at
 
         # Attach tool results to their matching tool_call entries
         for tc in all_tool_calls:
             tc["result"] = tool_results.get(tc.get("id", ""), "")
+
+        # 合并助手消息的文本
+        final_text = ""
+        if assistant_texts:
+            # 如果有多个助手消息，合并它们的文本
+            if len(assistant_texts) > 1:
+                # 合并所有文本，用换行符分隔
+                final_text = "\n\n".join(assistant_texts)
+            else:
+                final_text = assistant_texts[0]
 
         if final_text or all_tool_calls:
             turns.append({
@@ -217,6 +250,74 @@ def _group_into_display_turns(
                 "created_at": final_ts or (user_row[1] if user_row else 0),
             })
 
+    return turns
+
+
+def _group_into_web_display_turns(
+    rows: List[tuple],
+) -> List[Dict[str, Any]]:
+    """
+    专门用于Web界面显示的分组函数，不合并助手消息，保持SSE实时显示的效果。
+    
+    每个助手消息都单独显示，就像SSE实时打印一样。
+    
+    规则：
+    - 可见的用户消息单独显示
+    - 助手消息单独显示（不合并）
+    - tool_result用户消息被合并到对应的tool_use中
+    """
+    turns: List[Dict[str, Any]] = []
+    
+    # 用于存储tool_result结果
+    tool_results: Dict[str, str] = {}
+    
+    for role, raw_content, created_at in rows:
+        try:
+            content = json.loads(raw_content)
+        except Exception:
+            content = raw_content
+        
+        if role == "user":
+            # 检查是否是可见的用户消息
+            if _is_visible_user_message(content):
+                text = _extract_display_text(content)
+                if text:
+                    turns.append({
+                        "role": "user",
+                        "content": text,
+                        "created_at": created_at
+                    })
+            else:
+                # 收集tool_result结果
+                tool_results.update(_extract_tool_results(content))
+        
+        elif role == "assistant":
+            # 提取工具调用
+            tool_calls = _extract_tool_calls(content)
+            
+            # 将tool_result结果附加到对应的tool_call
+            for tc in tool_calls:
+                tc["result"] = tool_results.get(tc.get("id", ""), "")
+            
+            # 提取显示文本
+            text = _extract_display_text(content)
+            
+            # 创建助手消息
+            turn = {
+                "role": "assistant",
+                "content": text,
+                "tool_calls": tool_calls,
+                "created_at": created_at
+            }
+            
+            turns.append(turn)
+            
+            # 清空已使用的tool_results
+            for tc in tool_calls:
+                tool_id = tc.get("id", "")
+                if tool_id in tool_results:
+                    del tool_results[tool_id]
+    
     return turns
 
 
@@ -456,6 +557,7 @@ class ConversationStore:
         session_id: str,
         page: int = 1,
         page_size: int = 20,
+        use_web_display: bool = True,
     ) -> Dict[str, Any]:
         """
         Load a page of conversation history for UI display, grouped into turns.
@@ -471,6 +573,12 @@ class ConversationStore:
         Pages are numbered from 1 (most recent).  Messages within a page are
         returned in chronological order.
 
+        Args:
+            session_id: Unique session identifier
+            page: Page number (1-indexed)
+            page_size: Number of messages per page
+            use_web_display: If True, use web display mode (不合并助手消息)
+        
         Returns:
             {
                 "messages": [
@@ -504,7 +612,11 @@ class ConversationStore:
             finally:
                 conn.close()
 
-        visible = _group_into_display_turns(rows)
+        # 使用新的web显示模式，不合并助手消息
+        if use_web_display:
+            visible = _group_into_web_display_turns(rows)
+        else:
+            visible = _group_into_display_turns(rows)
 
         total = len(visible)
         offset = (page - 1) * page_size

@@ -55,6 +55,8 @@ class WebChannel(ChatChannel):
         self.session_queues = {}  # session_id -> Queue (fallback polling)
         self.request_to_session = {}  # request_id -> session_id
         self.sse_queues = {}  # request_id -> Queue (SSE streaming)
+        self.sse_queue_history = {}  # request_id -> list of sent events (for recovery)
+        self.sse_last_activity = {}  # request_id -> last activity timestamp
         self._http_server = None
 
     def _generate_msg_id(self):
@@ -236,16 +238,14 @@ class WebChannel(ChatChannel):
         # 事件计数器
         event_counter = last_event_id
         
-        # 记录连接开始
-        logger.info(f"[WebChannel] SSE连接建立: request_id={request_id}, last_event_id={last_event_id}, 队列大小={q.qsize()}")
-        print(f"🔗 SSE连接建立: request_id={request_id}, 从事件{last_event_id}开始")
+        # 记录连接开始（使用debug级别，减少日志噪音）
+        logger.debug(f"[WebChannel] SSE连接建立: request_id={request_id}, last_event_id={last_event_id}, 队列大小={q.qsize()}")
 
         try:
             # 如果last_event_id > 0，说明客户端已经收到了一些事件
             # 我们需要跳过这些事件（在队列中无法跳过，但可以记录日志）
             if last_event_id > 0:
-                logger.info(f"[WebChannel] SSE断点续传: request_id={request_id}, last_event_id={last_event_id}")
-                print(f"🔄 SSE断点续传: request_id={request_id}, 从事件{last_event_id}继续")
+                logger.debug(f"[WebChannel] SSE断点续传: request_id={request_id}, last_event_id={last_event_id}")
             
             while time.time() < deadline:
                 try:
@@ -266,39 +266,38 @@ class WebChannel(ChatChannel):
                 # 发送带事件ID的消息
                 yield f"id: {event_counter}\ndata: {payload}\n\n".encode("utf-8")
                 
-                # 记录发送的事件
+                # 记录发送的事件（只在调试模式下记录）
                 event_type = item.get("type", "unknown")
-                logger.debug(f"[WebChannel] SSE事件发送: request_id={request_id}, event_id={event_counter}, type={event_type}")
-                if event_type in ["delta", "tool_start", "tool_end"]:
-                    print(f"📤 SSE事件发送: request_id={request_id[:8]}..., event_id={event_counter}, type={event_type}")
+                # 减少日志频率：只记录重要事件或每10个事件记录一次
+                if event_counter % 10 == 0 or event_type in ["tool_start", "tool_end", "done", "error"]:
+                    logger.debug(f"[WebChannel] SSE事件发送: request_id={request_id}, event_id={event_counter}, type={event_type}")
+                # 移除控制台打印，减少日志噪音
+                # if event_type in ["delta", "tool_start", "tool_end"]:
+                #     print(f"📤 SSE事件发送: request_id={request_id[:8]}..., event_id={event_counter}, type={event_type}")
 
                 if item.get("type") == "done":
                     logger.info(f"[WebChannel] SSE完成: request_id={request_id}, 总事件数={event_counter}")
-                    print(f"✅ SSE完成: request_id={request_id[:8]}..., 总事件数={event_counter}")
                     break
                     
         except GeneratorExit:
             # 客户端主动断开连接
-            logger.info(f"[WebChannel] SSE连接断开: request_id={request_id}, 最后事件ID={event_counter}")
-            print(f"🔌 SSE连接断开: request_id={request_id[:8]}..., 最后事件ID={event_counter}")
+            logger.debug(f"[WebChannel] SSE连接断开: request_id={request_id}, 最后事件ID={event_counter}")
             raise
         except Exception as e:
             logger.error(f"[WebChannel] SSE错误: request_id={request_id}, 错误: {e}")
-            print(f"❌ SSE错误: request_id={request_id[:8]}..., 错误: {e}")
         finally:
             # 记录连接结束
-            logger.info(f"[WebChannel] SSE连接结束: request_id={request_id}, 最后事件ID={event_counter}")
-            print(f"🔚 SSE连接结束: request_id={request_id[:8]}..., 最后事件ID={event_counter}")
+            logger.debug(f"[WebChannel] SSE连接结束: request_id={request_id}, 最后事件ID={event_counter}")
             
             # 不要立即清理队列！保留队列以便客户端重连
             # 队列会在以下情况下清理：
             # 1. 客户端收到"done"事件后主动关闭连接
-            # 2. 超时后由定时任务清理
+            # 2. 超时后由定时任务清理（延长到5分钟）
             # 3. 新的请求覆盖旧的request_id
             
-            # 设置一个延迟清理任务（30秒后）
+            # 设置一个延迟清理任务（5分钟后）
             def delayed_cleanup():
-                time.sleep(30)  # 等待30秒，给客户端充足的重连时间
+                time.sleep(300)  # 等待5分钟，给客户端充足的重连时间
                 if request_id in self.sse_queues:
                     # 检查队列是否还有未处理的项目
                     try:
@@ -306,16 +305,13 @@ class WebChannel(ChatChannel):
                         item = self.sse_queues[request_id].get(block=False)
                         # 如果还有项目，放回去（说明客户端可能还在重连）
                         self.sse_queues[request_id].put(item)
-                        logger.info(f"[WebChannel] SSE队列仍有项目，暂不清理: request_id={request_id}, 队列大小={self.sse_queues[request_id].qsize()}")
-                        print(f"📦 SSE队列仍有项目: request_id={request_id[:8]}..., 队列大小={self.sse_queues[request_id].qsize()}")
+                        logger.debug(f"[WebChannel] SSE队列仍有项目，暂不清理: request_id={request_id}, 队列大小={self.sse_queues[request_id].qsize()}")
                     except Empty:
                         # 队列为空，可以安全清理
                         self.sse_queues.pop(request_id, None)
-                        logger.info(f"[WebChannel] SSE队列清理: request_id={request_id}")
-                        print(f"🗑️ SSE队列清理: request_id={request_id[:8]}...")
+                        logger.debug(f"[WebChannel] SSE队列清理: request_id={request_id}")
                     except Exception as e:
                         logger.error(f"[WebChannel] SSE队列检查错误: {e}")
-                        print(f"⚠️ SSE队列检查错误: {e}")
                 
             import threading
             threading.Thread(target=delayed_cleanup, daemon=True).start()
@@ -1124,6 +1120,7 @@ class HistoryHandler:
                 session_id=session_id,
                 page=int(params.page),
                 page_size=int(params.page_size),
+                use_web_display=True,  # 使用新的web显示模式，不合并助手消息
             )
             return json.dumps({"status": "success", **result}, ensure_ascii=False)
         except Exception as e:

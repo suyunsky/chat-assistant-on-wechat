@@ -405,6 +405,16 @@ class AgentBridge:
                         enhanced_query = query + file_info_text
                         logger.debug(f"[AgentBridge] Added file info to query: {len(files)} file(s)")
                 
+                # 首先保存用户消息到数据库（使用正确的格式）
+                if session_id:
+                    user_message = {
+                        "role": "user",
+                        "content": [{"type": "text", "text": enhanced_query}]
+                    }
+                    channel_type = (context.get("channel_type") or "") if context else ""
+                    self._persist_messages(session_id, [user_message], channel_type)
+                    logger.debug(f"[AgentBridge] Saved user message to history: {enhanced_query[:100]}...")
+                
                 # Use agent's run_stream method with event handler
                 response = agent.run_stream(
                     user_message=enhanced_query,
